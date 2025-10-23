@@ -1,9 +1,9 @@
 ***WORK IN PROGRESS—core pipeline functions but major features incomplete***
-
+#hello#
 This repo contains code for detecting bacterial flagellar motors in cryo-tomograms using deep learning segmentation methods. Active development is in v3.0; earlier versions are backlogged for reference.
 Datasets are published on Kaggle and is not included in the repo: https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025/data
 
-##TO DO LIST:##
+##TO DO LIST##
 	-Find the reason for the tensor shape mismatch during late stages of training. Currently the model can train successfully for 100 epochs on batch_size = 1 and show meaningful progress 
 	in the obvious reduction of losses. This means that the model architecture is fine and backpropagation is working as intended. 
 	-Create a better inference pipeline. I am currently using the slidingwindow inferer from MONAI but I cannot guarantee that it works properly given how customised the rest of the pipeline is. 

@@ -22,13 +22,10 @@ https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025
 - Experiment with other architectures and methods of ensembling.
 
 <p align="center">
-  <img src="images/Training_progress.png" width="300" alt="Model Architecture" />
+  <img src="images/Training_progress.png" width="700" alt="Model Architecture" />
 </p>
+<p align="center"><em>Figure 4: As you can see, the loss is decreasing quite drastically.</em></p>
 
-
-| <img src="images/Training_progress.png" width="700"/>     |
-|:---------------------------------------------------------:|
-| *As you can see, the loss is decreasing quite drastically*| 
 
 
 # The Method

@@ -7,9 +7,9 @@ https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025
 
 
 
-| <img src="images/tomo_side.png" width="300"/> | <img src="images/tomo_top.png" width="300"/> | <img src="images/tomo_top.png" width="300"/>|
+| <img src="images/tomo_side.png" width="300"/> | <img src="images/tomo_top.png" width="300"/> | <img src="images/dif_example.png" width="300"/>|
 |:---------------------------------------------:|:--------------------------------------------:|:-------------------------------------------:|
-| *Figure 1: Visualisation of the tomogram*     | *Figure 2: Side view*                        |*Figure 3: A clearer angle*                  |
+| *Figure 1: Visualisation of the tomogram*     | *Figure 2: Side view*                        |*Figure 3: Most are more difficult to see*   |
 
 
 ## TO DO LIST

@@ -1,0 +1,35 @@
+data_dir = "/home/porpita/BYU/DS/"
+checkpoint_dir = "/home/porpita/BYU/Latest_Ver/checkpoint"
+log_dir = "/home/porpita/BYU/Latest_Ver/logs"
+
+train = True
+val = True
+test = False
+train_val = False
+
+positive_ratio = 0.2
+dataset_size = 20
+target_voxel_spacing = 10.0
+
+mixup = True
+mixup_beta = 1.
+
+input_dimensions = [96, 96, 96]
+
+lr = 0.0001
+epochs = 100
+batch_size = 2
+shuffle = True
+pin_memory = True
+num_workers = 2
+seed = 42
+early_stopping_patience = 10
+
+class_weights = [1.0, 200.0]
+device = cuda
+
+inference_data_dir = ""
+inference_batch_size = 4
+inference_overlap = 0.25
+inference_num_workers = 4
+inference_tile_size = [96,96,96]

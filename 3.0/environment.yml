@@ -1,0 +1,21 @@
+name: byu
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  # Core packages managed by Conda for stability
+  - python=3.10
+  - pytorch
+  - torchvision
+  - monai
+  - numpy
+  - pandas
+  - scikit-learn
+  - pip
+
+  # Packages installed via pip
+  - pip:
+    - opencv-python       # Provides the cv2 module
+    - accelerate          # For Hugging Face Accelerate
+    - configargparse      # <-- Added here

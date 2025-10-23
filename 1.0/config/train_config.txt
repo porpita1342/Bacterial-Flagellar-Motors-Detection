@@ -1,0 +1,22 @@
+data_dir = 
+train = True
+val = True
+test = False
+train_val = False
+train_proportions = 0.8
+mixup = True
+input_dimensions = [96, 96, 96]
+
+
+learning_rate = 0.0001
+num_epochs = 100
+batch_size = 16
+mixup_beta = 0.2
+seed = 42
+
+class_weights = [1.0, 200]
+device = cuda
+
+
+model_save_path = ./checkpoints/
+log_dir = ./logs/

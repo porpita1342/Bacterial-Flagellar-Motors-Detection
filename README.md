@@ -1,6 +1,5 @@
 ***WORK IN PROGRESS—core pipeline functions but major features incomplete***
 
-# Hello
 
 This repo contains code for detecting bacterial flagellar motors in cryo-tomograms using deep learning segmentation methods. Active development is in v3.0; earlier versions are backlogged for reference.  
 **Datasets are published on Kaggle and are not included in the repo:**  

@@ -5,7 +5,12 @@ This repo contains code for detecting bacterial flagellar motors in cryo-tomogra
 **Datasets are published on Kaggle and are not included in the repo:**  
 https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025/data
 
-<img src="images/tomo_top.png" alt="Model Architecture" width="400"/>
+<img src="images/tomo_top.png" alt="Model Architecture" width="300"/>
+<p align="center"><em>Figure 1: Model architecture overview.</em></p>
+
+<img src="images/tomo_side.png" alt="Data Example" width="300"/>
+<p align="center"><em>Figure 2: Sample tomogram slice.</em></p>
+
 
 ![Visualisation of one of the tomograms](images/tomo_top.png)
 ![Side view](images/tomo_side.png)

@@ -5,6 +5,7 @@ This repo contains code for detecting bacterial flagellar motors in cryo-tomogra
 **Datasets are published on Kaggle and are not included in the repo:**  
 https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025/data
 
+<img src="images/tomo_top.png" alt="Model Architecture" width="400"/>
 
 ![Visualisation of one of the tomograms](images/tomo_top.png)
 ![Side view](images/tomo_side.png)
@@ -20,7 +21,7 @@ https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025
 - Try to generate gaussian spheres as target rather than single coordinates to make use of the dense target block created.
 - Experiment with other architectures and methods of ensembling.
 
-![As you can see, the loss is decreasing quite drastically](images/Training Progress.png)
+![As you can see, the loss is decreasing quite drastically](images/Training_Progress.png)
 
 ---
 

@@ -3,7 +3,9 @@
 
 This repo contains code for detecting bacterial flagellar motors in cryo-tomograms using deep learning segmentation methods. Active development is in v3.0; earlier versions are backlogged for reference.  
 **Datasets are published on Kaggle and are not included in the repo:**  
-[https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025/data](https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025/data)
+https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025/data
+
+
 ![Visualisation of one of the tomograms](images/tomo_top)
 ![Side view](images/tomo_side)
 

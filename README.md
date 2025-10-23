@@ -21,6 +21,10 @@ https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025
 - Try to generate gaussian spheres as target rather than single coordinates to make use of the dense target block created.
 - Experiment with other architectures and methods of ensembling.
 
+<p align="center">
+  <img src="images/Training_progress.png" width="300" alt="Model Architecture" />
+</p>
+
 
 | <img src="images/Training_progress.png" width="700"/>     |
 |:---------------------------------------------------------:|

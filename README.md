@@ -4,17 +4,20 @@
 This repo contains code for detecting bacterial flagellar motors in cryo-tomograms using deep learning segmentation methods. Active development is in v3.0; earlier versions are backlogged for reference.  
 **Datasets are published on Kaggle and are not included in the repo:**  
 [https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025/data](https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025/data)
+![Visualisation of one of the tomograms](images/tomo_top)
+![Side view](images/tomo_side)
 
 ---
 
 ## TO DO LIST
 
-- Find the reason for the tensor shape mismatch during late stages of training. Currently the model can train successfully for 100 epochs on batch_size = 1 and show meaningful progress in the obvious reduction of losses. This means that the model architecture is fine and backpropagation is working as intended.
+- Find the reason for the tensor shape mismatch during late stages of training. Currently the model can train successfully for about 30 epochs on batch_size = 1 and show meaningful progress in the obvious reduction of losses. This means that the model architecture is fine and backpropagation is working as intended.
 - Create a better inference pipeline. I am currently using the slidingwindow inferer from MONAI but I cannot guarantee that it works properly given how customised the rest of the pipeline is.
 - Change the ComprehensiveLogger to include methods to write a custom CSV file to track the training progress. This will make the later stages of visualisation easier.
 - Try to implement more methods of data augmentation. Currently we only have mixup, rotate, and flip.
 - Try to generate gaussian spheres as target rather than single coordinates to make use of the dense target block created.
 - Experiment with other architectures and methods of ensembling.
+![As you can see, the loss is decreasing quite drastically](images/Training Progress)
 
 ---
 
@@ -56,5 +59,5 @@ Given the complexity of the model and the size of the data, we will need to harn
 
 Therefore, we will be using Huggingface's Accelerate library to achieve this.
 
-As for the loss function, we will mainly refer to the one used in the Kaggle competition since it is quite well rounded.  
+As for the evaluation metric, we will mainly refer to the one used in the Kaggle competition since it is quite well rounded.  
 (https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025/overview/evaluation)

@@ -247,22 +247,19 @@ class DenseBCE(nn.Module):
         x = x.float()
         target = target.float()
         
-        # Apply sigmoid to get probabilities
         probs = torch.sigmoid(x)
         
-        # Compute BCE loss manually for more control
-        eps = torch.tensor(1e-8).to(target.device) # For numerical stability
+        eps = torch.tensor(1e-8).to(target.device) 
         try: 
             bce_loss = -(target * torch.log(probs + eps) + (1 - target) * torch.log(1 - probs + eps))
         except RuntimeError:
             breakpoint()
         
-        # Apply positive weight if specified (similar to BCEWithLogitsLoss)
+    
         if self.pos_weight is not None:
             bce_loss = target * self.pos_weight.to(bce_loss.device) * bce_loss + (1 - target) * bce_loss
         
-        # Compute per-class losses
-        class_losses = bce_loss.mean((0, 2, 3, 4))  # Average over batch and spatial dims
+        class_losses = bce_loss.mean((0, 2, 3, 4))  
         
         # Apply class weights
         if self.class_weights is not None:

@@ -1,6 +1,6 @@
 data_dir = "/home/porpita/BYU/DS/"
-checkpoint_dir = "/home/porpita/BYU/Latest_Ver/checkpoint"
-log_dir = "/home/porpita/BYU/Latest_Ver/logs"
+checkpoint_dir = "/home/porpita/BYU/3.0/checkpoint"
+log_dir = "/home/porpita/BYU/3.0/logs"
 
 train = True
 val = True

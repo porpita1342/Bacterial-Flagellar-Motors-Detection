@@ -188,7 +188,6 @@ class CustomDataset(Dataset):
         return adjusted_df
 
     def set_epoch(self, epoch):
-        """Call this at the start of each epoch for consistent shuffling"""
         self.epoch_seed = self.seed + epoch
         self.rng = np.random.RandomState(self.epoch_seed)
     
@@ -196,10 +195,8 @@ class CustomDataset(Dataset):
         return self.dataset_size
 
     def _resample_tile(self, tile, scale_factor):
-        """Resample individual tile to target voxel spacing using trilinear interpolation"""
         if abs(scale_factor - 1.0) < 0.01:
             return tile 
-        # Use trilinear interpolation for smooth resampling
         resampled = F.interpolate(
             tile.unsqueeze(0),  # Add batch dimension: (1, C, Z, Y, X)
             scale_factor=[scale_factor] * 3,
@@ -210,13 +207,11 @@ class CustomDataset(Dataset):
         return resampled
     
     def _get_positive_tomogram(self, tomo_row, tomo_id, item_rng):
-        """Extract positive tile with voxel spacing normalization."""
         if tomo_row['num_coords'] == 0:
             return None
 
         scale_factor = tomo_row['scale_factor']
 
-        # Select a random coordinate (already in target voxel spacing)
 
         if int(tomo_row['num_coords']) == 1: 
             coord_idx = 0
@@ -231,10 +226,8 @@ class CustomDataset(Dataset):
         y_range = tomo_row["Array shape (axis 1)"]
         x_range = tomo_row["Array shape (axis 2)"]
 
-        # --- Compute allowable shift ranges to keep tile in bounds ---
         def get_shift(label, size, array_range, bound):
             half = size // 2
-            # Distances to image boundaries (low and high ends)
             dist_to_low = label
             dist_to_high = array_range - label
             max_neg_shift = -min(half - bound, dist_to_low)
@@ -245,12 +238,10 @@ class CustomDataset(Dataset):
         shift_y = get_shift(adjusted_label_y, y, y_range, bound)
         shift_x = get_shift(adjusted_label_x, x, x_range, bound)
 
-        # Find tile center in adjusted space after shift
         center_z = adjusted_label_z + shift_z
         center_y = adjusted_label_y + shift_y
         center_x = adjusted_label_x + shift_x
 
-        # Compute tile bounds, clamped in-bounds
         z1 = max(0, center_z - z // 2)
         y1 = max(0, center_y - y // 2)
         x1 = max(0, center_x - x // 2)
@@ -258,7 +249,6 @@ class CustomDataset(Dataset):
         y2 = min(y_range, y1 + y)
         x2 = min(x_range, x1 + x)
 
-        # Adjust starts to ensure full tile if near array edge
         if z2 - z1 < z:
             z1 = max(0, z2 - z)
         if y2 - y1 < y:
@@ -334,7 +324,6 @@ class CustomDataset(Dataset):
                     break
             
             if not has_coords:
-                # Convert to original coordinate space for extraction
                 original_z1 = math.floor(z1 / scale_factor)
                 original_z2 = math.ceil(z2 / scale_factor)
                 original_y1 = math.floor(y1 / scale_factor)
@@ -342,7 +331,6 @@ class CustomDataset(Dataset):
                 original_x1 = math.floor(x1 / scale_factor)
                 original_x2 = math.ceil(x2 / scale_factor)
                 
-                # Extract and resample tile
                 tile = self.tiler.extract_tile(
                     tomo_id=tomo_id,
                     z1=original_z1, z2=original_z2,
@@ -354,13 +342,11 @@ class CustomDataset(Dataset):
                 tile = tile[:, :self.tile_size[0], :self.tile_size[1], :self.tile_size[2]]
                 tile = tile[:, :self.tile_size[0], :self.tile_size[1], :self.tile_size[2]]
 
-                # Pad if undersized
                 pad_z = self.tile_size[0] - tile.shape[1]
                 pad_y = self.tile_size[1] - tile.shape[2]
                 pad_x = self.tile_size[2] - tile.shape[3]
                 if pad_z > 0 or pad_y > 0 or pad_x > 0:
                     tile = F.pad(tile, (0, pad_x, 0, pad_y, 0, pad_z), mode='constant', value=0)
-                # Pad if undersized
                 pad_z = self.tile_size[0] - tile.shape[1]
                 pad_y = self.tile_size[1] - tile.shape[2]
                 pad_x = self.tile_size[2] - tile.shape[3]
@@ -368,28 +354,23 @@ class CustomDataset(Dataset):
                     tile = F.pad(tile, (0, pad_x, 0, pad_y, 0, pad_z), mode='constant', value=0)
                 return tile, 0.0, [(-1, -1, -1)], (tile_centre_z, tile_centre_y, tile_centre_x)
         
-        # Fallback to random tile if can't find true negative
         return self._get_random_tomogram(tomo_row, tomo_id, item_rng)
 
     def _get_random_tomogram(self, tomo_row, tomo_id, item_rng):
-        """Extract random tile with voxel spacing normalization"""
         scale_factor = tomo_row['scale_factor']
         
-        # Use adjusted shapes for random coordinate generation
         tile_centre_z, tile_centre_y, tile_centre_x, z1, y1, x1, z2, y2, x2 = get_rand_coords(
             tomo_row=tomo_row, 
             tile_size=self.tile_size,
             item_rng=item_rng
         )
         
-        # Convert to original coordinate space for extraction
         original_z1 = math.floor(z1 / scale_factor)
         original_z2 = math.ceil(z2 / scale_factor)
         original_y1 = math.floor(y1 / scale_factor)
         original_y2 = math.ceil(y2 / scale_factor)
         original_x1 = math.floor(x1 / scale_factor)
         original_x2 = math.ceil(x2 / scale_factor)
-        # Extract and resample tile
         tile = self.tiler.extract_tile(
             tomo_id=tomo_id,
             z1=original_z1, z2=original_z2,
@@ -400,13 +381,11 @@ class CustomDataset(Dataset):
         tile = self._resample_tile(tile, scale_factor)
         tile = tile[:, :self.tile_size[0], :self.tile_size[1], :self.tile_size[2]]
 
-        # Pad if undersized
         pad_z = self.tile_size[0] - tile.shape[1]
         pad_y = self.tile_size[1] - tile.shape[2]
         pad_x = self.tile_size[2] - tile.shape[3]
         if pad_z > 0 or pad_y > 0 or pad_x > 0:
             tile = F.pad(tile, (0, pad_x, 0, pad_y, 0, pad_z), mode='constant', value=0)
-        # Check for coordinates in adjusted space
         has_motor = 0.0
         local_coords = []
         
@@ -447,7 +426,6 @@ class CustomDataset(Dataset):
         if int(has_motor) != 1: 
             local_coords = [(-1, -1, -1)]
             
-        # Apply transforms
         if self.transform is not None:
             tile = self.transform(tile)
 
@@ -457,9 +435,6 @@ class CustomDataset(Dataset):
         pad = torch.ones((20-local_coords.shape[0], 3)) * -1 
         local_coords = torch.concatenate([local_coords, pad], dim=0)
 
-        # if tile.shape != (1,48,48,48): 
-        #     print("Shape does not MATCH")
-        #     print(tile.shape)
 
         return_dict = {
             "image_tile": tile,

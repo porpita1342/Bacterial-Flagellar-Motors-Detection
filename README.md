@@ -1,4 +1,4 @@
-WORK IN PROGRESS—core pipeline functions but major features incomplete
+***WORK IN PROGRESS—core pipeline functions but major features incomplete***
 
 This repo contains code for detecting bacterial flagellar motors in cryo-tomograms using deep learning segmentation methods. Active development is in v3.0; earlier versions are backlogged for reference.
 Datasets are published on Kaggle and is not included in the repo: https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025/data
@@ -41,6 +41,7 @@ Nevertheless, we ensure that the program is reproducible and deterministic via t
 gives the same tiles every single time, I created a NumPy RandomState object with the seed provided. This ensures that each tile experience the same offset from the location of the motor during generation.
 Given the complexity of the model and the size of the data, we will need to harness the power of distributed learning since we generally need to train the models for at least 200 EPOCHS and it simply is not feasible on my GPU. We also cannot use reasonable batch sizes locally and it will cause instabilities during training. 
 Therefore, we will be using Huggingface's Accelerate library to achieve this. 
+As for the loss function, we will mainly refer to the one used in the Kaggle competition since it is quite well rounded. (https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025/overview/evaluation)
 
 
 

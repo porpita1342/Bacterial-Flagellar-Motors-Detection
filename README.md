@@ -7,20 +7,11 @@ https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025
 
 
 
-| <img src="images/tomo_side.png" width="220"/> | <img src="images/tomo_top.png" width="220"/> |
+| <img src="images/tomo_side.png" width="300"/> | <img src="images/tomo_top.png" width="300"/> |
 |:------------------------------------------------------:|:------------------------------------------------:|
-| *Figure 1: Model architecture overview.*               | *Figure 2: Sample tomogram slice.*               |
+| *Figure 1: Visualisation of one of the tomograms*               | *Side view*               |
 
 
-<img src="images/tomo_top.png" alt="" width="500"/>
-<p align="center"><em>Figure 1: Visualisation of one of the tomograms.</em></p>
-
-<img src="images/tomo_side.png" alt="" width="500"/>
-<p align="center"><em>Figure 2: Side view.</em></p>
-
-
-![Visualisation of one of the tomograms](images/tomo_top.png)
-![Side view](images/tomo_side.png)
 
 ---
 

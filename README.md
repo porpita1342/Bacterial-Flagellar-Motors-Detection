@@ -24,7 +24,7 @@ https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025
 <p align="center">
   <img src="images/Training_progress.png" width="700" alt="Model Architecture" />
 </p>
-<p align="center"><em>Figure 4: As you can see, the loss is decreasing quite drastically.</em></p>
+<p align="center"><em>Figure 4: As you can see, the loss is decreasing quite drastically. Confirming that the model architecture and backpropagation is working as intended</em></p>
 
 
 

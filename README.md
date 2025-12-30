@@ -20,7 +20,7 @@ https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025
 - Try to implement more methods of data augmentation. Currently we only have mixup, rotate, and flip.
 - Try to generate gaussian spheres as target rather than single coordinates to make use of the dense target block created.
 - Experiment with other architectures and methods of ensembling.
-
+- I should probably experiment with 3D Unet sometime since that is usually a great architecture for those type of tasks.
 <p align="center">
   <img src="images/Training_progress.png" width="700" alt="Model Architecture" />
 </p>

@@ -19,3 +19,4 @@ dependencies:
     - opencv-python       # Provides the cv2 module
     - accelerate          # For Hugging Face Accelerate
     - configargparse      # <-- Added here
+#This is probably way too messy

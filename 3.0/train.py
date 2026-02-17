@@ -201,6 +201,32 @@ def train():
     patience_counter = 0
     last_best_path = None  # Track the previous best model path
 
+    # Scan checkpoint directory for existing best model files from previous runs
+    existing_best = [
+        os.path.join(cfg.checkpoint_dir, f)
+        for f in os.listdir(cfg.checkpoint_dir)
+        if f.startswith('best_model_epoch_') and f.endswith('.pt')
+    ] if os.path.isdir(cfg.checkpoint_dir) else []
+    if existing_best:
+        # Find the one with the lowest val_loss
+        for path in existing_best:
+            try:
+                ckpt = torch.load(path, map_location='cpu', weights_only=False)
+                val = ckpt.get('val_loss', float('inf'))
+                if val < best_val_loss:
+                    best_val_loss = val
+                    last_best_path = path
+            except Exception:
+                continue
+        # Delete all other best model files except the true best
+        for path in existing_best:
+            if path != last_best_path:
+                os.remove(path)
+                if accelerator.is_main_process:
+                    logger.main_logger.info(f"Cleaned up stale best model: {path}")
+        if accelerator.is_main_process and last_best_path is not None:
+            logger.main_logger.info(f"Resuming with best val_loss: {best_val_loss:.4f} from {last_best_path}")
+
     # Set validation loader epoch once for deterministic validation
     if hasattr(valid_loader.dataset, 'set_epoch'):
         valid_loader.dataset.set_epoch(0)

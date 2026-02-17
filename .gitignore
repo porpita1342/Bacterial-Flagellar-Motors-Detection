@@ -1,28 +1,57 @@
+# Datasets and large files
+data/
 *.csv
 *.json
 *.pkl
 *.h5
 *.hdf5
 *.parquet
-DS/
 *.zip
 *.tar.gz
 *.tar
-**/.DS_Store
+*.npy
+*.npz
+*.mrc
 
-
+# Model checkpoints and weights
 *.pth
 *.pt
 *.ckpt
 weights/
-
-.ipynb_checkpoints/
 checkpoint/
-logs/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS resource forks and metadata
+**/.DS_Store
+**/._*
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
 
+# Environments
 .env
 venv/
+.venv/
+env/
 
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+logs/
+*.log
+
+# Conda
+environment.yml

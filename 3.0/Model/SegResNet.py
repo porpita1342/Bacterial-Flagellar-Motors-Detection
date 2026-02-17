@@ -45,24 +45,28 @@ class AccelerateCoordinateLocalizationTrainer:
     
     def train_step(self, batch_x, coordinates_list):
         """Training step with Accelerate support"""
+        # 1. Create full-resolution targets
         targets_full = self.create_batch_targets(coordinates_list, batch_x.shape[2:])
-        targets_penult = self.downsample_targets(targets_full, scale_factor=0.5)
-        
-        # Apply MixUp
-        targets_full, targets_penult = rotate(targets_full,targets_penult)
-        targets_full, targets_penult = flip_3d(targets_full,targets_penult)
 
-        mixed_x, mixed_targets_full = self.mixup(batch_x, targets_full)
-        mixed_x, mixed_targets_penult = self.mixup(mixed_x, targets_penult)
-        
-        pred_final, pred_penultimate = self.model(mixed_x)
-        
-        # Compute losses
-        loss_final, class_losses_final = self.criterion(pred_final, mixed_targets_full)
-        loss_penult, class_losses_penult = self.criterion(pred_penultimate, mixed_targets_penult)
-        
+        # 2. Apply spatial augmentations to BOTH input and targets
+        batch_x, targets_full = rotate(batch_x, targets_full)
+        batch_x, targets_full = flip_3d(batch_x, targets_full)
+
+        # 3. Apply mixup once with same permutation to input and targets
+        batch_x, targets_full = self.mixup(batch_x, targets_full)
+
+        # 4. Downsample targets AFTER augmentation for penultimate supervision
+        targets_penult = self.downsample_targets(targets_full, scale_factor=0.5)
+
+        # 5. Forward pass
+        pred_final, pred_penultimate = self.model(batch_x)
+
+        # 6. Compute losses
+        loss_final, class_losses_final = self.criterion(pred_final, targets_full)
+        loss_penult, class_losses_penult = self.criterion(pred_penultimate, targets_penult)
+
         total_loss = loss_final + 0.5 * loss_penult
-        
+
         return {
             'total_loss': total_loss,
             'final_bg_loss': class_losses_final[0],
@@ -183,10 +187,7 @@ class SegResNetBackbone(nn.Module):
 
     def _make_final_conv(self, out_channels: int, in_channels:int):
         return nn.Sequential(
-            # get_norm_layer(name=self.norm, spatial_dims=self.spatial_dims, channels=self.init_filters),
-            # self.act_mod,
-            # should i even use this for the final output?
-            get_conv_layer(spatial_dims= self.spatial_dims, in_channels=in_channels, out_channels=out_channels, kernel_size=1, bias=True),
+            get_conv_layer(spatial_dims=self.spatial_dims, in_channels=in_channels, out_channels=out_channels, kernel_size=1, bias=True),
         )
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
         x = self.convInit(x)
@@ -229,19 +230,16 @@ class SegResNetBackbone(nn.Module):
         # Return the final output (last processed map) and the penultimate map for deep supervision
         final_output = processed_feature_maps[-1]
         penultimate_output = processed_feature_maps[-2]
-        if self.training:
-            return final_output, penultimate_output
-        else:
-            return final_output
+            
+        return final_output, penultimate_output
 
 
 
 class DenseBCE(nn.Module):
-    def __init__(self, class_weights=None, pos_weight=None, reduction='mean'):
+    def __init__(self, class_weights=None, pos_weight=None):
         super(DenseBCE, self).__init__()
         self.class_weights = class_weights
         self.pos_weight = pos_weight
-        self.reduction = reduction
     
     def forward(self, x, target):
         x = x.float()
@@ -249,11 +247,8 @@ class DenseBCE(nn.Module):
         
         probs = torch.sigmoid(x)
         
-        eps = torch.tensor(1e-8).to(target.device) 
-        try: 
-            bce_loss = -(target * torch.log(probs + eps) + (1 - target) * torch.log(1 - probs + eps))
-        except RuntimeError:
-            breakpoint()
+        eps = torch.tensor(1e-8).to(target.device)
+        bce_loss = -(target * torch.log(probs + eps) + (1 - target) * torch.log(1 - probs + eps))
         
     
         if self.pos_weight is not None:

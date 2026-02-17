@@ -21,7 +21,7 @@ def get_parser():
 
     # Dataset & preprocessing
     p.add('--positive_ratio', type=float, default=0.2, help='Positive sample ratio')
-    p.add('--dataset_size', type=int, default=8000, help='Number of samples in dataset')
+    p.add('--dataset_size', type=int, default=1000, help='Number of samples in dataset')
     p.add('--target_voxel_spacing', type=float, default=10.0, help='Target voxel spacing')
     p.add('--input_dimensions', type=int, nargs=3, default=[96,96,96], help='Input dimension [z,y,x]')
     p.add('--gaussian_blob_sigma', type=float, default=2.0, help='Sigma for Gaussian blob in target generation')
@@ -36,12 +36,11 @@ def get_parser():
     p.add('--batch_size', type=int, default=16, help='Batch size')
     p.add('--shuffle', action='store_true', help='Shuffle dataset during training')
     p.add('--pin_memory', action='store_true', help='Pin memory during DataLoader')
-    p.add('--num_workers', type=int, default=4, help='Number of DataLoader workers') 
+    p.add('--num_workers', type=int, default=8, help='Number of DataLoader workers')
     p.add('--early_stopping_patience', type=int, default=10, help='Early stopping patience')
 
     # Class weights and device
-    p.add('--class_weights', type=float, nargs='+', default=[0.1, 0.9], help='Class weights [background, foreground]') 
-    p.add('--device', type=str, default='cuda', help='Device to run on (cuda or cpu)')
+    p.add('--class_weights', type=float, nargs='+', default=[1.0, 200.0], help='Class weights [background, foreground]')
 
     # Inference options
     p.add('--inference_batch_size', type=int, default=4, help='Batch size during inference')
@@ -50,7 +49,6 @@ def get_parser():
     p.add('--inference_tile_size', type=int, nargs=3, default=[96,96,96], help='Tile size during inference')
 
     # Logging and checkpoint saving
-    p.add('--model_save_path', type=str, default='./checkpoints/', help='Path to save model checkpoints')
     p.add('--log_dir', type=str, default='./logs/', help='Directory to save logs')
     p.add('--experiment_name', type=str, default='coordinate_localization', help='Experiment name for logging')
 

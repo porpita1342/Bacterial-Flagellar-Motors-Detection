@@ -16,9 +16,9 @@ https://www.kaggle.com/competitions/byu-locating-bacterial-flagellar-motors-2025
 
 - ~~Find the reason for the tensor shape mismatch during late stages of training. Currently the model can train successfully for about 30 epochs on batch_size = 1 and show meaningful progress in the obvious reduction of losses. This means that the model architecture is fine and backpropagation is working as intended.~~ FIXED
 - Create a better inference pipeline. I am currently using the slidingwindow inferer from MONAI but I cannot guarantee that it works properly given how customised the rest of the pipeline is.
-- Change the ComprehensiveLogger to include methods to write a custom CSV file to track the training progress. This will make the later stages of visualisation easier.
+- ~~Change the ComprehensiveLogger to include methods to write a custom CSV file to track the training progress. This will make the later stages of visualisation easier.~~ IMPLEMENTED
 - Try to implement more methods of data augmentation. Currently we only have mixup, rotate, and flip.
-- Try to generate gaussian spheres as target rather than single coordinates to make use of the dense target block created.
+- ~~Try to generate gaussian spheres as target rather than single coordinates to make use of the dense target block created.~~ IMPLEMENTED
 - Experiment with other architectures and methods of ensembling.
 - I should probably experiment with 3D Unet sometime since that is usually a great architecture for those type of tasks.
 <p align="center">

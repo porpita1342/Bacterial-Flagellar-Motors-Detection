@@ -19,7 +19,8 @@ from torch.utils.data import DataLoader
 from torch.optim import Adam
 from accelerate import Accelerator
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from Utils.metrics import comp_score
+from Utils.metrics import comp_score, detect_peaks, nms_coords, fbeta_score_coords, compute_fbeta
+from collections import defaultdict
 from Utils.utils import (set_seed, clear_gpu_memory ,ComprehensiveLogger)
 from Utils.args import get_config
 from Config.model_configs import (model_configs, get_train_df_cfg, get_train_loader_cfg, get_valid_loader_cfg)
@@ -164,34 +165,87 @@ def train_epoch(epoch, logger, cfg):
 
 
 def validate_epoch():
-    """Validate for one epoch"""
-    global model, trainer, valid_loader, accelerator
+    """Validate for one epoch, computing loss and F_beta detection score."""
+    global model, trainer, valid_loader, accelerator, cfg
 
     model.eval()
     total_loss = 0
     num_batches = 0
 
+    # Distance threshold in adjusted voxel space (1000 Å / target_voxel_spacing)
+    threshold_voxels = 1000.0 / cfg.target_voxel_spacing
+
+    # Per-tomo accumulators
+    tomo_pred_coords = defaultdict(list)  # tomo_id -> [(z, y, x, conf), ...]
+    tomo_gt_coords = defaultdict(set)     # tomo_id -> {(z, y, x), ...}
+    tile_sz = None
+
     with torch.no_grad():
         for batch in valid_loader:
             batch_x = batch['image_tile']
             coordinates_list = [batch['local_coords'][i].tolist() for i in range(len(batch['local_coords']))]
+            tile_origins = batch['tile_origin']   # (B, 3) tensor — tile centres in adjusted space
+            tomo_ids = batch['tomo_id']
 
-            # Forward pass without MixUp
+            if tile_sz is None:
+                tile_sz = batch_x.shape[2:]  # (Z, Y, X)
+
+            # Forward pass without augmentation
             targets_full = trainer.create_batch_targets(coordinates_list, batch_x.shape[2:])
-
             pred_final, pred_penultimate = model(batch_x)
 
-            # Include penultimate loss to match training loss computation
+            # Loss (match training: final + 0.5 * penultimate)
             targets_penult = trainer.downsample_targets(targets_full, scale_factor=0.5)
             loss_final, _ = trainer.criterion(pred_final, targets_full)
             loss_penult, _ = trainer.criterion(pred_penultimate, targets_penult)
-
             total_loss += (loss_final + 0.5 * loss_penult).item()
-
             num_batches += 1
 
+            # Peak detection on the foreground channel
+            fg_probs = torch.sigmoid(pred_final[:, 1])  # (B, Z, Y, X)
+
+            for b in range(len(tomo_ids)):
+                tomo_id = tomo_ids[b]
+                origin = tile_origins[b].cpu()
+                z1_off = int(origin[0].item()) - tile_sz[0] // 2
+                y1_off = int(origin[1].item()) - tile_sz[1] // 2
+                x1_off = int(origin[2].item()) - tile_sz[2] // 2
+
+                # Ground truth: convert local tile coords to global adjusted-space coords
+                for lz, ly, lx in coordinates_list[b]:
+                    if lz < 0:
+                        continue
+                    tomo_gt_coords[tomo_id].add((
+                        int(lz) + z1_off,
+                        int(ly) + y1_off,
+                        int(lx) + x1_off,
+                    ))
+
+                # Predictions: detect peaks and convert to global coords
+                peaks, confidences = detect_peaks(fg_probs[b])
+                for k in range(len(peaks)):
+                    lz, ly, lx = peaks[k].tolist()
+                    conf = confidences[k].item()
+                    tomo_pred_coords[tomo_id].append((
+                        lz + z1_off,
+                        ly + y1_off,
+                        lx + x1_off,
+                        conf,
+                    ))
+
+    # Aggregate F_beta across all tomograms seen in this epoch
+    all_tp = all_fp = all_fn = 0
+    for tomo_id in set(tomo_gt_coords) | set(tomo_pred_coords):
+        gt_list = list(tomo_gt_coords.get(tomo_id, set()))
+        pred_list = nms_coords(tomo_pred_coords.get(tomo_id, []), threshold_voxels)
+        tp, fp, fn = fbeta_score_coords(pred_list, gt_list, threshold_voxels, beta=2.0)
+        all_tp += tp
+        all_fp += fp
+        all_fn += fn
+
+    fbeta = compute_fbeta(all_tp, all_fp, all_fn, beta=2.0)
     avg_loss = total_loss / num_batches
-    return avg_loss
+    return avg_loss, fbeta
 
 def train():
     """Main training function with simplified checkpointing and deletion"""
@@ -238,7 +292,7 @@ def train():
 
         # Train and validate
         train_loss, epoch_time = train_epoch(epoch, logger, cfg)
-        val_loss = validate_epoch()
+        val_loss, val_fbeta = validate_epoch()
 
         # Update scheduler
         scheduler.step(val_loss)
@@ -247,6 +301,7 @@ def train():
         if accelerator.is_main_process:
             current_lr = optimizer.param_groups[0]['lr']
             logger.log_epoch(epoch, train_loss, val_loss, current_lr, epoch_time)
+            logger.main_logger.info(f"Epoch {epoch:3d} | Val F2 (beta=2): {val_fbeta:.4f}")
 
         # Check and save if this is the new best model (with deletion)
         if val_loss < best_val_loss:

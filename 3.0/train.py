@@ -71,6 +71,14 @@ def set_everything_up():
 
     set_seed(SEED)
 
+    # Create a timestamped session directory to isolate logs and checkpoints
+    session_name = time.strftime("%Y-%m-%d_%H-%M-%S")
+    session_dir = os.path.join("sessions", session_name)
+    cfg.log_dir = os.path.join(session_dir, "logs")
+    cfg.checkpoint_dir = os.path.join(session_dir, "checkpoints")
+    os.makedirs(cfg.log_dir, exist_ok=True)
+    os.makedirs(cfg.checkpoint_dir, exist_ok=True)
+
     # Initialize logger
     logger = ComprehensiveLogger(log_dir=cfg.log_dir, experiment_name="BYU")
     logger.main_logger.info("Starting coordinate localization training...")

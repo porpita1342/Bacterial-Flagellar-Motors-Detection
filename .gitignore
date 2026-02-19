@@ -49,8 +49,9 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
-# Logs
+# Logs and training sessions
 logs/
+sessions/
 *.log
 
 # Conda

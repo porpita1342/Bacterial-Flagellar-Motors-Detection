@@ -20,17 +20,14 @@ class TomogramTiler:
             tomo_path = os.path.join(self.base_path, tomo_id)
             all_images = [f for f in os.listdir(tomo_path)
                          if f.endswith(('.png', '.jpg', '.jpeg', '.tiff'))]
-
             slice_mapping = {}
             for img in all_images:
                 try:
                     slice_idx = int(os.path.splitext(img)[0].replace('slice_', ''))
                     slice_mapping[slice_idx] = img
                 except ValueError:
-                    continue  # Skip files that don't match pattern
-
+                    continue
             self._slice_mappings[tomo_id] = slice_mapping
-
         return self._slice_mappings[tomo_id]
 
     def extract_tile(self, tomo_id, z1, z2, y1, y2, x1, x2):
@@ -38,30 +35,46 @@ class TomogramTiler:
         slice_mapping = self._get_slice_mapping(tomo_id)
         tomo_path = os.path.join(self.base_path, tomo_id)
 
-        # Pre-allocate volume tensor
-        tile_depth = z2 - z1
-        tile_height = y2 - y1
-        tile_width = x2 - x1
-
-        volume = torch.zeros((tile_depth, tile_height, tile_width), dtype=torch.float32)
+        volume = torch.zeros((z2 - z1, y2 - y1, x2 - x1), dtype=torch.float32)
 
         for i, slice_idx in enumerate(range(z1, z2)):
             if slice_idx not in slice_mapping:
                 raise ValueError(f"Slice {slice_idx} missing for tomo_id {tomo_id}")
-
-            image_file = slice_mapping[slice_idx]
-            full_path = os.path.join(tomo_path, image_file)
-
+            full_path = os.path.join(tomo_path, slice_mapping[slice_idx])
             img = cv2.imread(full_path, cv2.IMREAD_GRAYSCALE)
             if img is None:
                 raise ValueError(f"Could not load image: {full_path}")
+            volume[i] = torch.from_numpy(img[y1:y2, x1:x2].astype(np.float32) / 255.0)
 
-            # Crop and normalize
-            cropped = img[y1:y2, x1:x2].astype(np.float32) / 255.0
-            volume[i] = torch.from_numpy(cropped)
+        return volume.unsqueeze(0)  # (1, Z, Y, X)
 
-        # Add channel dimension: (C, Z, Y, X)
-        return volume.unsqueeze(0)
+    def load_full_tomogram(self, tomo_id, scale_factor=1.0):
+        """Load full tomogram as (1, Z, Y, X) tensor, optionally resampled."""
+        slice_mapping = self._get_slice_mapping(tomo_id)
+        z_dim = len(slice_mapping)
+        if z_dim == 0:
+            raise ValueError(f"No slices for {tomo_id}")
+
+        first_path = os.path.join(self.base_path, tomo_id, slice_mapping[min(slice_mapping.keys())])
+        first_img = cv2.imread(first_path, cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255.0
+        y_dim, x_dim = first_img.shape
+
+        volume = torch.zeros((1, z_dim, y_dim, x_dim), dtype=torch.float32)
+        for i, slice_idx in enumerate(sorted(slice_mapping.keys())):
+            path = os.path.join(self.base_path, tomo_id, slice_mapping[slice_idx])
+            img = cv2.imread(path, cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255.0
+            volume[0, i] = torch.from_numpy(img)
+
+        if abs(scale_factor - 1.0) >= 0.01:
+            volume = F.interpolate(
+                volume.unsqueeze(0),
+                scale_factor=[scale_factor] * 3,
+                mode='trilinear',
+                align_corners=False,
+            ).squeeze(0)
+
+        return volume  # (1, Z, Y, X)
+
 
 def get_rand_coords(tomo_row: pd.DataFrame,
                     tile_size: Union[int, Tuple[int, int, int]] = (32, 128, 128),
@@ -75,138 +88,61 @@ def get_rand_coords(tomo_row: pd.DataFrame,
     if z_range < tile_depth or y_range < tile_height or x_range < tile_width:
         raise ValueError(f"Tile size {tile_size} exceeds tomogram bounds {(z_range, y_range, x_range)}")
 
-    min_z_center = tile_depth // 2
-    max_z_center = z_range - tile_depth // 2 - 1
-    min_y_center = tile_height // 2
-    max_y_center = y_range - tile_height // 2 - 1
-    min_x_center = tile_width // 2
-    max_x_center = x_range - tile_width // 2 - 1
-
-    tile_centre_z = item_rng.randint(min_z_center, max_z_center + 1)
-    tile_centre_y = item_rng.randint(min_y_center, max_y_center + 1)
-    tile_centre_x = item_rng.randint(min_x_center, max_x_center + 1)
+    tile_centre_z = item_rng.randint(tile_depth // 2, z_range - tile_depth // 2)
+    tile_centre_y = item_rng.randint(tile_height // 2, y_range - tile_height // 2)
+    tile_centre_x = item_rng.randint(tile_width // 2, x_range - tile_width // 2)
 
     z1 = int(tile_centre_z - tile_depth // 2)
     y1 = int(tile_centre_y - tile_height // 2)
     x1 = int(tile_centre_x - tile_width // 2)
-
     z2 = int(tile_centre_z + tile_depth // 2)
     y2 = int(tile_centre_y + tile_height // 2)
     x2 = int(tile_centre_x + tile_width // 2)
 
-    # Consistent coordinate ordering (Z, Y, X)
     return (tile_centre_z, tile_centre_y, tile_centre_x,
             int(z1), int(y1), int(x1), int(z2), int(y2), int(x2))
 
-class CustomDataset(Dataset):
-    def __init__(self,
-                train_df: pd.DataFrame,
-                img_files_dir: str,
-                tile_size: Union[int, Tuple[int, int, int]] = (96,96,96),
-                positive_ratio: float = 0.2,
-                transform: Optional[Callable] = None,
-                dataset_size: int = 1000,
-                seed: int = 42,
-                target_voxel_spacing: Optional[float] = None):
 
-        super().__init__()
+def create_binary_targets(coordinates, shape, sigma=2.0):
+    """
+    Create 2-channel (background/foreground) soft Gaussian target volume.
+    coordinates: list of (z, y, x) tuples
+    shape: (Z, Y, X) spatial dimensions
+    Returns: (2, Z, Y, X) tensor
+    """
+    target = torch.zeros((2,) + shape)
+    target[0] = 1.0  # Background channel
 
-        if 'Voxel spacing' not in train_df.columns:
-            raise ValueError("The DataFrame must contain a 'Voxel spacing' column")
+    for coord in coordinates:
+        z, y, x = coord
+        if not (0 <= z < shape[0] and 0 <= y < shape[1] and 0 <= x < shape[2]):
+            continue
+        radius = int(3 * sigma)
+        z_min, z_max = int(max(0, z - radius)), int(min(shape[0], z + radius + 1))
+        y_min, y_max = int(max(0, y - radius)), int(min(shape[1], y + radius + 1))
+        x_min, x_max = int(max(0, x - radius)), int(min(shape[2], x + radius + 1))
+        zz, yy, xx = torch.meshgrid(torch.arange(z_min, z_max),
+                                    torch.arange(y_min, y_max),
+                                    torch.arange(x_min, x_max), indexing='ij')
+        dist = torch.sqrt((zz - z) ** 2 + (yy - y) ** 2 + (xx - x) ** 2)
+        foreground_prob = torch.exp(-dist ** 2 / (2 * sigma ** 2))
+        target[1, z_min:z_max, y_min:y_max, x_min:x_max] = torch.maximum(
+            target[1, z_min:z_max, y_min:y_max, x_min:x_max], foreground_prob)
 
-        self.seed = seed
-        self.rng = np.random.RandomState(seed)
-        self.epoch_seed = seed
+    target[0] = 1.0 - target[1]
+    return target
 
-        # Determine target voxel spacing
-        if target_voxel_spacing is None:
-            voxel_spacings = train_df['Voxel spacing'].values
-            self.target_voxel_spacing = np.median(voxel_spacings)
-            print(f"Auto-selected target voxel spacing: {self.target_voxel_spacing:.2f} Angstroms")
-        else:
-            self.target_voxel_spacing = target_voxel_spacing
-            print(f"Using target voxel spacing: {self.target_voxel_spacing:.2f} Angstroms")
 
-        # Pre-process the dataframe to adjust coordinates and shapes
-        self.df = self._preprocess_dataframe_with_voxel_spacing(train_df.copy())
-
-        self.img_files_dir = img_files_dir
+class TomogramSampler:
+    """
+    Handles positive, hard-negative, and random tile sampling strategies.
+    Owns the geometric utilities (coordinate conversion, resampling, padding)
+    shared across all sampling modes, keeping CustomDataset focused purely
+    on dataset orchestration.
+    """
+    def __init__(self, tiler: TomogramTiler, tile_size: Tuple[int, int, int]):
+        self.tiler = tiler
         self.tile_size = tile_size
-        self.transform = transform
-        self.dataset_size = dataset_size
-        self.unique_tomo_ids = self.df['tomo_id'].unique()
-        self.positive_ratio = positive_ratio
-        self.tiler = TomogramTiler(base_path=img_files_dir)
-
-    def _preprocess_dataframe_with_voxel_spacing(self, df):
-        """
-        Pre-calculate what coordinates and shapes would be after voxel spacing normalization.
-        This avoids complex coordinate transformations during training.
-        """
-        adjusted_df = df.copy()
-
-        print("Pre-calculating adjusted coordinates for voxel spacing normalization...")
-
-        for idx, row in adjusted_df.iterrows():
-            original_spacing = row['Voxel spacing']
-            scale_factor = original_spacing / self.target_voxel_spacing
-            # Adjust coordinates
-            adjusted_coords = []
-            for coord in row['coordinates']:
-                adjusted_coord = [
-                    math.floor(coord[0] * scale_factor),  # Z
-                    math.floor(coord[1] * scale_factor),  # Y
-                    math.floor(coord[2] * scale_factor)   # X
-                ]
-                if row['coordinates'][0][0] == -1:
-                    adjusted_coords.append([-1,-1,-1])
-                else:
-                    adjusted_coords.append(adjusted_coord)
-
-            adjusted_df.at[idx, 'coordinates'] = adjusted_coords
-
-            # Adjust array shapes (tomogram dimensions after resampling)
-            for axis in range(3):
-                original_shape = row[f'Array shape (axis {axis})']
-                new_shape = math.ceil(original_shape * scale_factor)
-                adjusted_df.at[idx, f'Array shape (axis {axis})'] = new_shape
-
-            # Update voxel spacing to target
-            adjusted_df.at[idx, 'Voxel spacing'] = self.target_voxel_spacing
-            # Store scale factor for later use
-            adjusted_df.at[idx, 'scale_factor'] = scale_factor
-
-        print(f"Adjusted coordinates for {len(adjusted_df)} tomograms")
-        return adjusted_df
-
-    def set_epoch(self, epoch):
-        self.epoch_seed = self.seed + epoch
-        self.rng = np.random.RandomState(self.epoch_seed)
-
-    def __len__(self):
-        return self.dataset_size
-
-    def _resample_tile(self, tile, scale_factor):
-        if abs(scale_factor - 1.0) < 0.01:
-            return tile
-        resampled = F.interpolate(
-            tile.unsqueeze(0),  # Add batch dimension: (1, C, Z, Y, X)
-            scale_factor=[scale_factor] * 3,
-            mode='trilinear',
-            align_corners=False
-        ).squeeze(0)  # Remove batch dimension: (C, Z, Y, X)
-
-        return resampled
-
-    def _trim_and_pad_tile(self, tile):
-        """Trim tile to tile_size and pad if undersized"""
-        tile = tile[:, :self.tile_size[0], :self.tile_size[1], :self.tile_size[2]]
-        pad_z = self.tile_size[0] - tile.shape[1]
-        pad_y = self.tile_size[1] - tile.shape[2]
-        pad_x = self.tile_size[2] - tile.shape[3]
-        if pad_z > 0 or pad_y > 0 or pad_x > 0:
-            tile = F.pad(tile, (0, pad_x, 0, pad_y, 0, pad_z), mode='constant', value=0)
-        return tile
 
     @staticmethod
     def _adjusted_to_original_bounds(z1, y1, x1, z2, y2, x2, scale_factor):
@@ -219,17 +155,42 @@ class CustomDataset(Dataset):
         ox2 = ox1 + round((x2 - x1) / scale_factor)
         return oz1, oy1, ox1, oz2, oy2, ox2
 
-    def _get_positive_tomogram(self, tomo_row, tomo_id, item_rng):
+    def _resample_tile(self, tile, scale_factor):
+        if abs(scale_factor - 1.0) < 0.01:
+            return tile
+        return F.interpolate(
+            tile.unsqueeze(0),
+            scale_factor=[scale_factor] * 3,
+            mode='trilinear',
+            align_corners=False
+        ).squeeze(0)
+
+    def _trim_and_pad_tile(self, tile):
+        """Trim tile to tile_size and zero-pad if undersized."""
+        tile = tile[:, :self.tile_size[0], :self.tile_size[1], :self.tile_size[2]]
+        pad_z = self.tile_size[0] - tile.shape[1]
+        pad_y = self.tile_size[1] - tile.shape[2]
+        pad_x = self.tile_size[2] - tile.shape[3]
+        if pad_z > 0 or pad_y > 0 or pad_x > 0:
+            tile = F.pad(tile, (0, pad_x, 0, pad_y, 0, pad_z), mode='constant', value=0)
+        return tile
+
+    def _extract_and_resample(self, tomo_id, z1, y1, x1, z2, y2, x2, scale_factor):
+        """Convert to original space, extract, resample, and pad in one call."""
+        oz1, oy1, ox1, oz2, oy2, ox2 = self._adjusted_to_original_bounds(
+            z1, y1, x1, z2, y2, x2, scale_factor)
+        tile = self.tiler.extract_tile(tomo_id=tomo_id,
+                                       z1=oz1, z2=oz2, y1=oy1, y2=oy2, x1=ox1, x2=ox2)
+        tile = self._resample_tile(tile, scale_factor)
+        return self._trim_and_pad_tile(tile)
+
+    def get_positive(self, tomo_row, tomo_id, item_rng):
+        """Sample a tile guaranteed to contain at least one motor."""
         if tomo_row['num_coords'] == 0:
             return None
 
         scale_factor = tomo_row['scale_factor']
-
-        if int(tomo_row['num_coords']) == 1:
-            coord_idx = 0
-        else:
-            coord_idx = item_rng.randint(0, tomo_row['num_coords'] - 1)
-
+        coord_idx = 0 if int(tomo_row['num_coords']) == 1 else item_rng.randint(0, tomo_row['num_coords'] - 1)
         adjusted_label_z, adjusted_label_y, adjusted_label_x = map(int, tomo_row['coordinates'][coord_idx])
 
         tz, ty, tx = self.tile_size
@@ -240,25 +201,16 @@ class CustomDataset(Dataset):
 
         def get_shift(label, size, array_range, bnd):
             half = size // 2
-            dist_to_low = label
-            dist_to_high = array_range - label
-            max_neg_shift = -min(half - bnd, dist_to_low)
-            max_pos_shift = min(half - bnd, dist_to_high)
-            if max_neg_shift > max_pos_shift:
-                return 0
-            return item_rng.randint(max_neg_shift, max_pos_shift)
+            max_neg = -min(half - bnd, label)
+            max_pos = min(half - bnd, array_range - label)
+            return 0 if max_neg > max_pos else item_rng.randint(max_neg, max_pos)
 
-        # Retry loop: up to 3 attempts to place the motor inside the tile
         z1 = y1 = x1 = z2 = y2 = x2 = 0
         motor_inside = False
-        for _attempt in range(3):
-            shift_z = get_shift(adjusted_label_z, tz, z_range, bound)
-            shift_y = get_shift(adjusted_label_y, ty, y_range, bound)
-            shift_x = get_shift(adjusted_label_x, tx, x_range, bound)
-
-            center_z = adjusted_label_z + shift_z
-            center_y = adjusted_label_y + shift_y
-            center_x = adjusted_label_x + shift_x
+        for _ in range(3):
+            center_z = adjusted_label_z + get_shift(adjusted_label_z, tz, z_range, bound)
+            center_y = adjusted_label_y + get_shift(adjusted_label_y, ty, y_range, bound)
+            center_x = adjusted_label_x + get_shift(adjusted_label_x, tx, x_range, bound)
 
             z1 = max(0, center_z - tz // 2)
             y1 = max(0, center_y - ty // 2)
@@ -274,144 +226,149 @@ class CustomDataset(Dataset):
             if x2 - x1 < tx:
                 x1 = max(0, x2 - tx)
 
-            if (z1 <= adjusted_label_z < z2 and
-                y1 <= adjusted_label_y < y2 and
-                x1 <= adjusted_label_x < x2):
+            if z1 <= adjusted_label_z < z2 and y1 <= adjusted_label_y < y2 and x1 <= adjusted_label_x < x2:
                 motor_inside = True
                 break
 
-        # Fallback: force-center tile on the motor
         if not motor_inside:
             z1 = max(0, min(adjusted_label_z - tz // 2, z_range - tz))
             y1 = max(0, min(adjusted_label_y - ty // 2, y_range - ty))
             x1 = max(0, min(adjusted_label_x - tx // 2, x_range - tx))
-            z2 = z1 + tz
-            y2 = y1 + ty
-            x2 = x1 + tx
+            z2, y2, x2 = z1 + tz, y1 + ty, x1 + tx
 
-        original_z1, original_y1, original_x1, original_z2, original_y2, original_x2 = \
-            self._adjusted_to_original_bounds(z1, y1, x1, z2, y2, x2, scale_factor)
+        tile = self._extract_and_resample(tomo_id, z1, y1, x1, z2, y2, x2, scale_factor)
 
-        # Extract tile and resample
-        tile = self.tiler.extract_tile(
-            tomo_id=tomo_id,
-            z1=original_z1, z2=original_z2,
-            y1=original_y1, y2=original_y2,
-            x1=original_x1, x2=original_x2
-        )
-        tile = self._resample_tile(tile, scale_factor)
-        tile = self._trim_and_pad_tile(tile)
+        local_coords = [
+            (cz - z1, cy - y1, cx - x1)
+            for cz, cy, cx in tomo_row['coordinates']
+            if z1 <= cz < z2 and y1 <= cy < y2 and x1 <= cx < x2
+        ]
+        tile_center = ((z1 + z2) // 2, (y1 + y2) // 2, (x1 + x2) // 2)
+        return tile, 1.0, local_coords, tile_center
 
-        # Calculate local coordinates in the resampled tile space
-        local_coords = []
-        for (coord_z, coord_y, coord_x) in tomo_row['coordinates']:
-            if (z1 <= coord_z < z2 and y1 <= coord_y < y2 and x1 <= coord_x < x2):
-                local_coord = (coord_z - z1, coord_y - y1, coord_x - x1)
-                local_coords.append(local_coord)
-
-        tile_center_z = (z1 + z2) // 2
-        tile_center_y = (y1 + y2) // 2
-        tile_center_x = (x1 + x2) // 2
-
-        return tile, 1.0, local_coords, (tile_center_z, tile_center_y, tile_center_x)
-
-
-    def _get_hard_negative(self, tomo_row, tomo_id, item_rng):
-        """Generate hard negative tiles with voxel spacing normalization"""
+    def get_hard_negative(self, tomo_row, tomo_id, item_rng):
+        """Sample a tile that does not overlap any known motor (up to 50 attempts)."""
         scale_factor = tomo_row['scale_factor']
-        max_attempts = 50
-
-        for attempt in range(max_attempts):
-            # Use adjusted shapes for random coordinate generation
-            adjusted_tomo_row = tomo_row.copy()
-
+        for _ in range(50):
             tile_centre_z, tile_centre_y, tile_centre_x, z1, y1, x1, z2, y2, x2 = get_rand_coords(
-                tomo_row=adjusted_tomo_row,
-                tile_size=self.tile_size,
-                item_rng=item_rng
+                tomo_row=tomo_row, tile_size=self.tile_size, item_rng=item_rng)
+            has_coords = any(
+                z1 <= cz < z2 and y1 <= cy < y2 and x1 <= cx < x2
+                for cz, cy, cx in tomo_row['coordinates']
             )
-
-            # Check if this tile contains any adjusted coordinates
-            has_coords = False
-            for (adjusted_coord_z, adjusted_coord_y, adjusted_coord_x) in tomo_row['coordinates']:
-                if (z1 <= adjusted_coord_z < z2 and
-                    y1 <= adjusted_coord_y < y2 and
-                    x1 <= adjusted_coord_x < x2):
-                    has_coords = True
-                    break
-
             if not has_coords:
-                original_z1, original_y1, original_x1, original_z2, original_y2, original_x2 = \
-                    self._adjusted_to_original_bounds(z1, y1, x1, z2, y2, x2, scale_factor)
-
-                tile = self.tiler.extract_tile(
-                    tomo_id=tomo_id,
-                    z1=original_z1, z2=original_z2,
-                    y1=original_y1, y2=original_y2,
-                    x1=original_x1, x2=original_x2
-                )
-
-                tile = self._resample_tile(tile, scale_factor)
-                tile = self._trim_and_pad_tile(tile)
-
+                tile = self._extract_and_resample(tomo_id, z1, y1, x1, z2, y2, x2, scale_factor)
                 return tile, 0.0, [(-1, -1, -1)], (tile_centre_z, tile_centre_y, tile_centre_x)
 
-        return self._get_random_tomogram(tomo_row, tomo_id, item_rng)
+        return self.get_random(tomo_row, tomo_id, item_rng)
 
-    def _get_random_tomogram(self, tomo_row, tomo_id, item_rng):
+    def get_random(self, tomo_row, tomo_id, item_rng):
+        """Sample a fully random tile; label is set by whether any motor falls inside."""
         scale_factor = tomo_row['scale_factor']
-
         tile_centre_z, tile_centre_y, tile_centre_x, z1, y1, x1, z2, y2, x2 = get_rand_coords(
-            tomo_row=tomo_row,
-            tile_size=self.tile_size,
-            item_rng=item_rng
-        )
+            tomo_row=tomo_row, tile_size=self.tile_size, item_rng=item_rng)
 
-        original_z1, original_y1, original_x1, original_z2, original_y2, original_x2 = \
-            self._adjusted_to_original_bounds(z1, y1, x1, z2, y2, x2, scale_factor)
-        tile = self.tiler.extract_tile(
-            tomo_id=tomo_id,
-            z1=original_z1, z2=original_z2,
-            y1=original_y1, y2=original_y2,
-            x1=original_x1, x2=original_x2
-        )
+        tile = self._extract_and_resample(tomo_id, z1, y1, x1, z2, y2, x2, scale_factor)
 
-        tile = self._resample_tile(tile, scale_factor)
-        tile = self._trim_and_pad_tile(tile)
-
-        has_motor = 0.0
-        local_coords = []
-
-        for (adjusted_coord_z, adjusted_coord_y, adjusted_coord_x) in tomo_row['coordinates']:
-            if (z1 <= adjusted_coord_z < z2 and
-                y1 <= adjusted_coord_y < y2 and
-                x1 <= adjusted_coord_x < x2):
-
-                has_motor = 1.0
-                local_coord = (
-                    adjusted_coord_z - z1,
-                    adjusted_coord_y - y1,
-                    adjusted_coord_x - x1
-                )
-                local_coords.append(local_coord)
-
-        if has_motor == 0.0:
+        local_coords = [
+            (cz - z1, cy - y1, cx - x1)
+            for cz, cy, cx in tomo_row['coordinates']
+            if z1 <= cz < z2 and y1 <= cy < y2 and x1 <= cx < x2
+        ]
+        has_motor = 1.0 if local_coords else 0.0
+        if not local_coords:
             local_coords = [(-1, -1, -1)]
-
         return tile, has_motor, local_coords, (tile_centre_z, tile_centre_y, tile_centre_x)
 
+
+class CustomDataset(Dataset):
+    def __init__(self,
+                 train_df: pd.DataFrame,
+                 img_files_dir: str,
+                 tile_size: Union[int, Tuple[int, int, int]] = (96, 96, 96),
+                 positive_ratio: float = 0.2,
+                 transform: Optional[callable] = None,
+                 dataset_size: int = 1000,
+                 seed: int = 42,
+                 target_voxel_spacing: Optional[float] = None):
+
+        super().__init__()
+
+        if 'Voxel spacing' not in train_df.columns:
+            raise ValueError("The DataFrame must contain a 'Voxel spacing' column")
+
+        self.seed = seed
+        self.epoch_seed = seed
+
+        if target_voxel_spacing is None:
+            self.target_voxel_spacing = np.median(train_df['Voxel spacing'].values)
+            print(f"Auto-selected target voxel spacing: {self.target_voxel_spacing:.2f} Angstroms")
+        else:
+            self.target_voxel_spacing = target_voxel_spacing
+            print(f"Using target voxel spacing: {self.target_voxel_spacing:.2f} Angstroms")
+
+        self.df = self._preprocess_dataframe_with_voxel_spacing(train_df.copy())
+        self.img_files_dir = img_files_dir
+        self.tile_size = tile_size
+        self.transform = transform
+        self.dataset_size = dataset_size
+        self.positive_ratio = positive_ratio
+
+        tiler = TomogramTiler(base_path=img_files_dir)
+        self.sampler = TomogramSampler(tiler=tiler, tile_size=tile_size)
+
+    def _preprocess_dataframe_with_voxel_spacing(self, df):
+        """
+        Pre-calculate adjusted coordinates and shapes for voxel spacing normalisation.
+        Avoids repeated coordinate transforms during training.
+        """
+        adjusted_df = df.copy()
+        print("Pre-calculating adjusted coordinates for voxel spacing normalization...")
+
+        for idx, row in adjusted_df.iterrows():
+            original_spacing = row['Voxel spacing']
+            scale_factor = original_spacing / self.target_voxel_spacing
+
+            adjusted_coords = []
+            for coord in row['coordinates']:
+                if row['coordinates'][0][0] == -1:
+                    adjusted_coords.append([-1, -1, -1])
+                else:
+                    adjusted_coords.append([
+                        math.floor(coord[0] * scale_factor),
+                        math.floor(coord[1] * scale_factor),
+                        math.floor(coord[2] * scale_factor)
+                    ])
+            adjusted_df.at[idx, 'coordinates'] = adjusted_coords
+
+            for axis in range(3):
+                adjusted_df.at[idx, f'Array shape (axis {axis})'] = math.ceil(
+                    row[f'Array shape (axis {axis})'] * scale_factor)
+
+            adjusted_df.at[idx, 'Voxel spacing'] = self.target_voxel_spacing
+            adjusted_df.at[idx, 'scale_factor'] = scale_factor
+
+        print(f"Adjusted coordinates for {len(adjusted_df)} tomograms")
+        return adjusted_df
+
+    def set_epoch(self, epoch):
+        self.epoch_seed = self.seed + epoch
+
+    def __len__(self):
+        return self.dataset_size
+
     def __getitem__(self, idx):
-        item_seed = (self.epoch_seed + idx) % (2**32 - 1)
+        item_seed = (self.epoch_seed + idx) % (2 ** 32 - 1)
         item_rng = np.random.RandomState(item_seed)
 
         if item_rng.random() < self.positive_ratio:
             tomo_row = self.df.loc[self.df['num_coords'] > 0].sample(n=1).iloc[0]
             tomo_id = tomo_row['tomo_id']
-            tile, has_motor, local_coords, tile_origin = self._get_positive_tomogram(tomo_row, tomo_id, item_rng)
+            tile, has_motor, local_coords, tile_origin = self.sampler.get_positive(tomo_row, tomo_id, item_rng)
         else:
             tomo_row = self.df.loc[self.df['num_coords'] == 0].sample(n=1).iloc[0]
             tomo_id = tomo_row['tomo_id']
-            tile, has_motor, local_coords, tile_origin = self._get_hard_negative(tomo_row, tomo_id, item_rng)
+            tile, has_motor, local_coords, tile_origin = self.sampler.get_hard_negative(tomo_row, tomo_id, item_rng)
 
         if int(has_motor) != 1:
             local_coords = [(-1, -1, -1)]
@@ -421,8 +378,9 @@ class CustomDataset(Dataset):
 
         if not isinstance(tile, torch.Tensor):
             tile = torch.tensor(tile, dtype=torch.float32)
+
         local_coords = torch.tensor(local_coords, dtype=torch.float32)
-        pad = torch.ones((20-local_coords.shape[0], 3)) * -1
+        pad = torch.ones((20 - local_coords.shape[0], 3)) * -1
         local_coords = torch.concatenate([local_coords, pad], dim=0)
 
         return {

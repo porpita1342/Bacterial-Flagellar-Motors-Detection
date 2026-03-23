@@ -2,11 +2,12 @@ import numpy as np
 import pandas as pd
 import sklearn.metrics
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 #All losses and eval metrics are stored here.
 
-__all__ = ['comp_score', 'detect_peaks', 'nms_coords', 'fbeta_score_coords', 'compute_fbeta']
+__all__ = ['comp_score', 'detect_peaks', 'nms_coords', 'fbeta_score_coords', 'compute_fbeta', 'DenseBCE']
 
 class ParticipantVisibleError(Exception):
     # If you want an error message to be shown to participants, you must raise the error as a ParticipantVisibleError
@@ -181,3 +182,30 @@ def compute_fbeta(tp, fp, fn, beta=2.0):
     if denom == 0:
         return 0.0
     return (1 + beta**2) * tp / denom
+
+
+class DenseBCE(nn.Module):
+    """
+    Dense (voxel-wise) Binary Cross-Entropy loss with optional per-class and
+    per-voxel positive weighting. Returns both a weighted scalar and a
+    per-class loss breakdown.
+    """
+    def __init__(self, class_weights=None, pos_weight=None):
+        super(DenseBCE, self).__init__()
+        self.class_weights = class_weights
+        self.pos_weight = pos_weight
+
+    def forward(self, x, target):
+        x = x.float()
+        target = target.float()
+        probs = torch.sigmoid(x)
+        eps = torch.tensor(1e-8).to(target.device)
+        bce_loss = -(target * torch.log(probs + eps) + (1 - target) * torch.log(1 - probs + eps))
+        if self.pos_weight is not None:
+            bce_loss = target * self.pos_weight.to(bce_loss.device) * bce_loss + (1 - target) * bce_loss
+        class_losses = bce_loss.mean((0, 2, 3, 4))
+        if self.class_weights is not None:
+            weighted_loss = (class_losses * self.class_weights.to(class_losses.device)).sum()
+        else:
+            weighted_loss = class_losses.sum()
+        return weighted_loss, class_losses

@@ -28,7 +28,18 @@ def get_train_df_cfg(cfg):
         "positive_ratio": cfg.positive_ratio,
         "transform": train_transforms,
         "dataset_size": cfg.dataset_size,
-        "seed": 42,
+        "seed": cfg.seed,
+        "target_voxel_spacing": cfg.target_voxel_spacing,
+    }
+
+
+def get_valid_df_cfg(cfg):
+    return {
+        "tile_size": tuple(cfg.input_dimensions),
+        "positive_ratio": cfg.positive_ratio,
+        "transform": None,  # No augmentation during validation
+        "dataset_size": cfg.dataset_size,
+        "seed": cfg.seed,
         "target_voxel_spacing": cfg.target_voxel_spacing,
     }
 

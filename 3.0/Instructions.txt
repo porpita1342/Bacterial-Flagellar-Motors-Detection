@@ -1,0 +1,13 @@
+docker build -t byu:latest .
+# the -t flag names the image. you can name it whatever. 
+#the '.' provides the build context. It tells docker to automatically find the docker file.
+
+docker run -it --rm \
+  --gpus all \
+  --ipc=host \
+  -v $(pwd):/workspace \
+  -p 8888:8888 \
+  byu:latest
+
+# This creates a persistent container because it takes too long to launch one every single time.
+# Remember to manually select the \workspace directory after attaching VS code to the container

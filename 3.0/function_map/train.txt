@@ -1,0 +1,177 @@
+#I have 11 global variables defined, which is genuinely an issue. 
+#_load_full_tomogram should be in dataloader
+
+
+================================================================================
+FILE: train.py
+PURPOSE: Top-level training and inference entry point. Orchestrates the full
+         pipeline: argument parsing, dataset/dataloader creation, model
+         instantiation, Accelerate-backed training loop with checkpointing and
+         early stopping, and sliding-window inference.
+================================================================================
+
+NOTE ON GLOBAL STATE
+--------------------------------------------------------------------------------
+The following module-level variables are shared across functions via `global`:
+    accelerator, train_df, valid_df, model, trainer,
+    optimizer, scheduler, train_loader, valid_loader, logger, cfg
+They are initialised to None and populated by set_everything_up().
+
+
+================================================================================
+
+FUNCTION: create_validation_set()
+--------------------------------------------------------------------------------
+PURPOSE:
+    Splits out a fixed validation set of 130 tomograms from the global train_df
+    (sampled with random_state=42) and removes them from train_df in-place.
+
+INPUTS:
+    None  (reads/writes global train_df)
+
+OUTPUTS:
+    valid_set  (pd.DataFrame)  -- 130-row DataFrame of validation tomograms
+
+
+================================================================================
+
+FUNCTION: set_everything_up()
+--------------------------------------------------------------------------------
+PURPOSE:
+    Full initialisation routine. Parses arguments, seeds everything, creates
+    timestamped session directories for logs and checkpoints, initialises the
+    logger and Accelerator, loads and preprocesses the CSV, builds datasets and
+    DataLoaders, constructs the model, optimizer (Adam), and scheduler
+    (ReduceLROnPlateau), prepares all objects with Accelerate, then instantiates
+    the trainer. Populates all global variables as side-effects.
+
+INPUTS:
+    None  (reads CLI / config-file arguments via get_config())
+
+OUTPUTS:
+    cfg  (argparse.Namespace)  -- Parsed and augmented config (log_dir and
+                                   checkpoint_dir updated to session paths)
+
+    Side-effects (globals set):
+        accelerator, train_df, valid_df, model, trainer,
+        optimizer, scheduler, train_loader, valid_loader, logger
+
+
+================================================================================
+
+FUNCTION: train_epoch(epoch, logger, cfg)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Runs one full training epoch. Iterates over train_loader, calls
+    trainer.train_step, performs backprop via accelerator.backward, and
+    accumulates the average loss. Logs per-batch results and memory snapshots
+    periodically via the logger.
+
+INPUTS:
+    epoch   (int)                  -- Current epoch index (0-based)
+    logger  (ComprehensiveLogger)  -- Logger instance
+    cfg     (argparse.Namespace)   -- Config; used for cfg.epochs in progress bar
+
+OUTPUTS:
+    (avg_loss, epoch_time)
+        avg_loss    (float)  -- Mean total loss over all batches in the epoch
+        epoch_time  (float)  -- Wall-clock seconds for the entire epoch
+
+
+================================================================================
+
+FUNCTION: validate_epoch()
+--------------------------------------------------------------------------------
+PURPOSE:
+    Runs one full validation pass without gradient computation. Computes the
+    combined validation loss (matching training: final + 0.5 * penultimate) and
+    the F2 detection score. Performs peak detection and NMS on the foreground
+    probability maps, converts local tile coordinates to global adjusted-space
+    coordinates, then accumulates TP/FP/FN across all tomograms.
+
+INPUTS:
+    None  (reads globals: model, trainer, valid_loader, accelerator, cfg)
+
+OUTPUTS:
+    (avg_loss, fbeta)
+        avg_loss  (float)  -- Mean validation loss over all batches
+        fbeta     (float)  -- Aggregate F2 score across all validation tomograms
+
+
+================================================================================
+
+FUNCTION: train()
+--------------------------------------------------------------------------------
+PURPOSE:
+    Outer training loop. Calls set_everything_up(), then iterates for cfg.epochs
+    epochs calling train_epoch and validate_epoch each iteration. Manages:
+      - Best-model checkpointing: saves when val_loss improves; deletes previous best
+      - Interval checkpointing: every 5 epochs after epoch 10
+      - Early stopping: breaks when patience_counter >= cfg.early_stopping_patience
+      - Epoch-level learning rate scheduling via ReduceLROnPlateau
+      - GPU memory clearing between epochs
+      - Metric flushing to JSON at end of training
+
+INPUTS:
+    None  (reads/writes globals; args from set_everything_up())
+
+OUTPUTS:
+    None  (side-effects: saves .pt checkpoint files; writes log and JSON files)
+
+    Checkpoint dict saved per file:
+        epoch, model_state_dict, optimizer_state_dict, scheduler_state_dict,
+        train_loss, val_loss, best_val_loss, config (dict), timestamp
+
+
+================================================================================
+
+FUNCTION: _load_full_tomogram(tomo_id, img_files_dir, tiler, scale_factor=1.0)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Loads an entire tomogram volume from disk as a float32 tensor, normalising
+    pixel values to [0, 1]. Optionally trilinearly resamples to target voxel
+    spacing using scale_factor.
+
+INPUTS:
+    tomo_id        (str)            -- Tomogram identifier
+    img_files_dir  (str)            -- Root image directory
+    tiler          (TomogramTiler)  -- Tiler instance (used for slice mapping)
+    scale_factor   (float)          -- original_spacing / target_voxel_spacing;
+                                       no resampling if |scale_factor - 1.0| < 0.01
+
+OUTPUTS:
+    volume  (Tensor, shape [1, Z, Y, X])  -- Full normalised tomogram on CPU;
+                                             resampled to target spacing if needed
+
+
+================================================================================
+
+FUNCTION: inference(valid_df, img_dir, target_voxel_spacing=10.0)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Runs sliding-window inference (MONAI sliding_window_inference, 96³ tiles,
+    25% overlap, Gaussian weighting) over every tomogram in valid_df. Logs
+    per-tomogram timing and memory usage. Currently does not perform
+    post-processing (peak detection) — score is always None.
+
+INPUTS:
+    valid_df               (pd.DataFrame)  -- Per-tomogram DataFrame with columns
+                                              'tomo_id' and 'Voxel spacing'
+    img_dir                (str)           -- Directory containing tomogram sub-folders
+    target_voxel_spacing   (float)         -- Target spacing in Angstroms (default 10.0)
+
+OUTPUTS:
+    results  (list[dict])  -- One dict per successfully processed tomogram:
+        {
+          'tomo_id'              : str
+          'score'                : None  (placeholder)
+          'num_tiles'            : int   (estimated tile count)
+          'inference_time'       : float (seconds for model forward pass)
+          'reconstruction_time'  : float (always 0.0 currently)
+          'total_time'           : float (seconds including data loading)
+          'tiles_per_second'     : float
+          'volume_shape'         : torch.Size
+        }
+    Tomograms that raise an exception are skipped and logged to error_logger.
+
+================================================================================

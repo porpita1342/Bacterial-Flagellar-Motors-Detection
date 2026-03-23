@@ -1,0 +1,278 @@
+CustomDataset has too many concerns. I should probably take out _get_positive_tomogram, _get_hard_negative,
+  _get_random_tomogram and make it into a separate sampler 
+
+================================================================================
+FILE: Data/dataloader.py
+PURPOSE: Data loading pipeline for 3D cryo-ET tomogram tiles. Handles slice-based
+         image loading, voxel-spacing normalisation, positive/negative sampling
+         strategies, Gaussian target generation, and the DataFrame preprocessing
+         step that groups per-motor rows into per-tomogram records.
+================================================================================
+
+
+CLASS: TomogramTiler
+--------------------------------------------------------------------------------
+PURPOSE:
+    Loads 3D sub-volumes ("tiles") from tomograms stored as stacks of 2D image
+    slices on disk. Caches per-tomogram slice-to-filename mappings to avoid
+    repeated directory scans.
+
+CONSTRUCTOR: __init__(base_path)
+    INPUTS:
+        base_path  (str)  -- Root directory containing one sub-folder per tomo_id
+    INITIALISES:
+        self.base_path       -- Stored path
+        self._slice_mappings -- Empty dict; populated lazily per tomogram
+
+--------------------------------------------------------------------------------
+
+METHOD: _get_slice_mapping(tomo_id)
+    PURPOSE:
+        Returns (and caches) a dict mapping integer slice index → filename for
+        all PNG/JPG/JPEG/TIFF files inside the tomogram's directory. Files not
+        matching the 'slice_<int>' naming convention are silently skipped.
+    INPUTS:
+        tomo_id  (str)  -- Tomogram identifier (matches sub-folder name)
+    OUTPUTS:
+        slice_mapping  (dict[int, str])  -- { slice_index : filename }
+
+--------------------------------------------------------------------------------
+
+METHOD: extract_tile(tomo_id, z1, z2, y1, y2, x1, x2)
+    PURPOSE:
+        Reads consecutive slices from disk, crops each to the (y1:y2, x1:x2)
+        region, normalises pixel values to [0, 1], and stacks them into a
+        float32 tensor with a channel dimension prepended.
+    INPUTS:
+        tomo_id  (str)  -- Tomogram identifier
+        z1, z2   (int)  -- Slice range [z1, z2)
+        y1, y2   (int)  -- Row crop range
+        x1, x2   (int)  -- Column crop range
+    OUTPUTS:
+        volume  (Tensor, shape [1, Z, Y, X])  -- Normalised 3D tile; raises
+                                                 ValueError if a slice is missing
+                                                 or unreadable
+
+
+================================================================================
+
+FUNCTION: get_rand_coords(tomo_row, tile_size=(32,128,128), item_rng=None)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Samples a random tile centre within the valid range of a tomogram (ensuring
+    the full tile fits inside the volume) and returns both the centre and the
+    resulting corner coordinates.
+
+INPUTS:
+    tomo_row   (pd.Series)               -- Single-tomogram row with columns
+                                            'Array shape (axis 0/1/2)'
+    tile_size  (int | tuple[int,int,int]) -- Tile depth/height/width (default (32,128,128))
+    item_rng   (np.random.RandomState)   -- Per-item RNG for reproducibility
+
+OUTPUTS:
+    (tile_centre_z, tile_centre_y, tile_centre_x,
+     z1, y1, x1, z2, y2, x2)  -- tuple of 9 ints in adjusted voxel-space;
+                                   raises ValueError if tile exceeds tomogram bounds
+
+
+================================================================================
+
+CLASS: CustomDataset(Dataset)
+--------------------------------------------------------------------------------
+PURPOSE:
+    PyTorch Dataset that yields 3D image tiles and associated motor coordinate
+    targets for training. Implements controlled positive/negative sampling,
+    voxel-spacing normalisation (pre-computed at construction), and on-the-fly
+    MONAI transforms.
+
+CONSTRUCTOR: __init__(train_df, img_files_dir, tile_size=(96,96,96),
+                      positive_ratio=0.2, transform=None, dataset_size=1000,
+                      seed=42, target_voxel_spacing=None)
+    INPUTS:
+        train_df              (pd.DataFrame)         -- Per-tomogram DataFrame from
+                                                        preprocess_dataframe(); must
+                                                        contain 'Voxel spacing'
+        img_files_dir         (str)                  -- Root image directory
+        tile_size             (tuple[int,int,int])   -- (Z, Y, X) tile size
+        positive_ratio        (float)                -- Fraction of samples drawn
+                                                        from positive tomograms
+        transform             (Callable | None)      -- MONAI/torchvision transform
+                                                        applied to each tile
+        dataset_size          (int)                  -- Virtual epoch length
+        seed                  (int)                  -- Base RNG seed
+        target_voxel_spacing  (float | None)         -- Angstroms/voxel to normalise
+                                                        to; uses median if None
+    INITIALISES:
+        self.df                    -- Pre-processed DataFrame (adjusted coords/shapes)
+        self.tiler                 -- TomogramTiler instance
+        self.target_voxel_spacing  -- Resolved spacing value
+
+--------------------------------------------------------------------------------
+
+METHOD: _preprocess_dataframe_with_voxel_spacing(df)
+    PURPOSE:
+        Pre-computes adjusted motor coordinates and tomogram array shapes for
+        every row in df by scaling with (original_spacing / target_voxel_spacing).
+        Stores scale_factor per row. Called once at construction.
+    INPUTS:
+        df  (pd.DataFrame)  -- Copy of the raw per-tomogram DataFrame
+    OUTPUTS:
+        adjusted_df  (pd.DataFrame)  -- Same structure; coordinates, array shapes,
+                                        voxel spacing, and scale_factor updated
+
+--------------------------------------------------------------------------------
+
+METHOD: set_epoch(epoch)
+    PURPOSE:
+        Updates the epoch-level random seed so each epoch draws a different
+        (but reproducible) sequence of tiles.
+    INPUTS:
+        epoch  (int)  -- Current training epoch index
+    OUTPUTS:
+        None
+
+--------------------------------------------------------------------------------
+
+METHOD: __len__()
+    PURPOSE:
+        Returns the virtual dataset size (not the number of physical tomograms).
+    INPUTS:  None
+    OUTPUTS:
+        dataset_size  (int)
+
+--------------------------------------------------------------------------------
+
+METHOD: _resample_tile(tile, scale_factor)
+    PURPOSE:
+        Trilinearly resamples a tile tensor if scale_factor differs from 1.0 by
+        more than 0.01. Used to normalise tiles to target voxel spacing.
+    INPUTS:
+        tile          (Tensor, shape [C, Z, Y, X])  -- Raw extracted tile
+        scale_factor  (float)                        -- Resampling multiplier
+    OUTPUTS:
+        resampled  (Tensor, shape [C, Z', Y', X'])  -- Resampled tile
+
+--------------------------------------------------------------------------------
+
+METHOD: _trim_and_pad_tile(tile)
+    PURPOSE:
+        Ensures a tile is exactly self.tile_size by cropping any excess and
+        zero-padding any deficit along each spatial dimension.
+    INPUTS:
+        tile  (Tensor, shape [C, Z, Y, X])  -- Tile that may be slightly over/under size
+    OUTPUTS:
+        tile  (Tensor, shape [C, *tile_size])  -- Exactly sized tile
+
+--------------------------------------------------------------------------------
+
+STATIC METHOD: _adjusted_to_original_bounds(z1, y1, x1, z2, y2, x2, scale_factor)
+    PURPOSE:
+        Converts tile corner coordinates from adjusted (normalised) voxel space
+        back to original voxel space for on-disk extraction. Used consistently
+        across all sampling methods.
+    INPUTS:
+        z1, y1, x1   (int)    -- Lower corner in adjusted space
+        z2, y2, x2   (int)    -- Upper corner in adjusted space
+        scale_factor (float)  -- original_spacing / target_voxel_spacing
+    OUTPUTS:
+        (oz1, oy1, ox1, oz2, oy2, ox2)  -- tuple of 6 ints in original space
+
+--------------------------------------------------------------------------------
+
+METHOD: _get_positive_tomogram(tomo_row, tomo_id, item_rng)
+    PURPOSE:
+        Samples a tile guaranteed to contain at least one flagellar motor.
+        Randomly centres the tile near a chosen motor with a small random shift,
+        retrying up to 3 times if the motor falls outside the tile, then falling
+        back to force-centering. Returns the tile, its label, local motor
+        coordinates, and the tile centre.
+    INPUTS:
+        tomo_row  (pd.Series)              -- Row for this tomogram (adjusted space)
+        tomo_id   (str)                    -- Tomogram identifier
+        item_rng  (np.random.RandomState)  -- Per-item RNG
+    OUTPUTS:
+        (tile, has_motor, local_coords, tile_center)
+            tile         (Tensor [C, Z, Y, X])     -- Extracted and resampled tile
+            has_motor    (float)                    -- Always 1.0
+            local_coords (list of (z, y, x))        -- Motor positions in tile space
+            tile_center  (tuple[int,int,int])       -- Global adjusted-space centre
+        Returns None if the tomogram has no coordinates.
+
+--------------------------------------------------------------------------------
+
+METHOD: _get_hard_negative(tomo_row, tomo_id, item_rng)
+    PURPOSE:
+        Attempts (up to 50 times) to sample a tile that does NOT overlap any
+        known motor location, providing a hard negative example. Falls back to
+        _get_random_tomogram if no motor-free tile is found within the limit.
+    INPUTS:
+        tomo_row  (pd.Series)              -- Row for this tomogram (adjusted space)
+        tomo_id   (str)                    -- Tomogram identifier
+        item_rng  (np.random.RandomState)  -- Per-item RNG
+    OUTPUTS:
+        (tile, has_motor, local_coords, tile_center)
+            tile         (Tensor [C, Z, Y, X])  -- Motor-free tile
+            has_motor    (float)                 -- 0.0
+            local_coords (list)                  -- [(-1, -1, -1)]
+            tile_center  (tuple[int,int,int])
+
+--------------------------------------------------------------------------------
+
+METHOD: _get_random_tomogram(tomo_row, tomo_id, item_rng)
+    PURPOSE:
+        Samples a completely random tile from the tomogram. Sets has_motor to
+        1.0 and records local coordinates if any motor happens to fall inside
+        the tile; otherwise returns a negative sample.
+    INPUTS:
+        tomo_row  (pd.Series)              -- Row for this tomogram (adjusted space)
+        tomo_id   (str)                    -- Tomogram identifier
+        item_rng  (np.random.RandomState)  -- Per-item RNG
+    OUTPUTS:
+        (tile, has_motor, local_coords, tile_center)  -- Same structure as above
+
+--------------------------------------------------------------------------------
+
+METHOD: __getitem__(idx)
+    PURPOSE:
+        Draws one sample from the dataset. With probability positive_ratio, a
+        positive tomogram is chosen and _get_positive_tomogram is called;
+        otherwise a negative tomogram is chosen and _get_hard_negative is called.
+        Applies self.transform to the tile if set. Pads local_coords to a fixed
+        length of 20 with -1 sentinels.
+    INPUTS:
+        idx  (int)  -- Sample index (used to derive a per-item seed)
+    OUTPUTS:
+        sample  (dict)  -- {
+                             "image_tile"     : Tensor [C, Z, Y, X]
+                             "has_motor"      : Tensor scalar (0.0 or 1.0)
+                             "local_coords"   : Tensor [20, 3]  (-1 = no motor)
+                             "tile_origin"    : Tensor [3]  (global adjusted centre)
+                             "tomo_id"        : str
+                             "voxel_spacing"  : Tensor [1]
+                             "original_shape" : list[int] (len 3)
+                             "scale_factor"   : Tensor [1]
+                           }
+
+
+================================================================================
+
+FUNCTION: preprocess_dataframe(df)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Transforms the raw per-motor CSV (one row per motor per tomogram) into a
+    per-tomogram DataFrame (one row per tomogram) by grouping on tomo_id.
+    Aggregates motor coordinates into a list, counts valid motors, and carries
+    forward voxel spacing and array shape.
+
+INPUTS:
+    df  (pd.DataFrame)  -- Raw labels CSV with columns:
+                            'tomo_id', 'Motor axis 0/1/2',
+                            'Voxel spacing', 'Array shape (axis 0/1/2)'
+
+OUTPUTS:
+    processed  (pd.DataFrame)  -- One row per tomogram with columns:
+                                   'tomo_id', 'coordinates' (list of [z,y,x]),
+                                   'num_coords', 'Voxel spacing',
+                                   'Array shape (axis 0/1/2)'
+
+================================================================================

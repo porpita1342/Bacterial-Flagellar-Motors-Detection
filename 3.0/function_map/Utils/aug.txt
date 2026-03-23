@@ -1,0 +1,81 @@
+================================================================================
+FILE: Utils/aug.py
+PURPOSE: Data augmentation utilities — spatial transforms (rotate, flip) and
+         Mixup blending for 3D input/target pairs during training.
+================================================================================
+
+
+CLASS: Mixup(nn.Module)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Applies Mixup augmentation to a batch of inputs and targets. Samples mixing
+    coefficients from a Beta distribution and linearly interpolates between
+    shuffled pairs within the batch. Optionally handles a third tensor (Z).
+
+CONSTRUCTOR: __init__(mix_beta, mixadd=False)
+    INPUTS:
+        mix_beta  (float)  -- Alpha/beta parameter for the Beta distribution
+                              controlling how strongly samples are blended.
+        mixadd    (bool)   -- If True, targets are blended by addition and
+                              clipped to [0,1] instead of linear interpolation.
+    INITIALISES:
+        self.beta_distribution  -- Beta(mix_beta, mix_beta) sampler
+        self.mixadd             -- Stored flag
+
+METHOD: forward(X, Y, Z=None)
+    PURPOSE:
+        Performs the Mixup blend on a batch. Generates a random permutation
+        and per-sample coefficients, then mixes X with its shuffled version.
+        Y (and optionally Z) are mixed the same way or summed (if mixadd).
+    INPUTS:
+        X  (Tensor, shape [B, ...])  -- Input image batch
+        Y  (Tensor, shape [B, ...])  -- Primary target batch (e.g. segmentation map)
+        Z  (Tensor, shape [B, ...] | None)  -- Optional secondary target batch
+    OUTPUTS:
+        If Z is None : (X_mixed, Y_mixed)         -- tuple of two Tensors
+        If Z given   : (X_mixed, Y_mixed, Z_mixed) -- tuple of three Tensors
+
+
+================================================================================
+
+FUNCTION: rotate(x, mask=None, dims=((-3,-2), (-3,-1), (-2,-1)), p=1.0)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Applies random 90-degree rotations to a 3D tensor (and optionally its mask)
+    independently along each specified pair of axes. Each axis-pair rotation
+    is applied with probability p.
+
+INPUTS:
+    x     (Tensor)              -- Input volume, shape [B, C, Z, Y, X] or similar
+    mask  (Tensor | None)       -- Target/mask tensor of the same shape; rotated
+                                   identically to x if provided
+    dims  (tuple of 2-tuples)   -- Axis pairs to rotate along.
+                                   Default: all three planar pairs of the last 3 dims
+    p     (float)               -- Probability [0,1] of applying rotation per axis pair
+
+OUTPUTS:
+    If mask is None : x           -- Rotated input Tensor
+    If mask given   : (x, mask)   -- Tuple of rotated input and rotated mask
+
+
+================================================================================
+
+FUNCTION: flip_3d(x, mask=None, dims=(-3,-2,-1), p=0.5)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Randomly flips a 3D tensor (and optionally its mask) along any subset of
+    the specified axes. Each axis is flipped independently with probability p.
+
+INPUTS:
+    x     (Tensor)         -- Input volume, shape [B, C, Z, Y, X] or similar
+    mask  (Tensor | None)  -- Target/mask tensor of the same shape; flipped
+                              identically to x if provided
+    dims  (tuple of ints)  -- Spatial axes to consider for flipping.
+                              Default: last three dimensions
+    p     (float)          -- Probability [0,1] of flipping along each axis
+
+OUTPUTS:
+    If mask is None : x           -- Flipped input Tensor
+    If mask given   : (x, mask)   -- Tuple of flipped input and flipped mask
+
+================================================================================

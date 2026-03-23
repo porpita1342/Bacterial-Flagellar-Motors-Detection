@@ -1,0 +1,195 @@
+================================================================================
+FILE: Utils/utils.py
+PURPOSE: General training utilities — seeding, GPU memory management, and a
+         multi-channel logger that writes separate log files for training,
+         memory, inference, and errors, plus JSON metric dumps.
+================================================================================
+
+
+FUNCTION: set_seed(seed=42)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Sets the random seed globally across Python, NumPy, and PyTorch (including
+    all CUDA devices) for reproducibility. Also forces cuDNN into deterministic
+    mode and disables auto-tuning benchmarks.
+
+INPUTS:
+    seed  (int)  -- Seed value to apply everywhere (default 42)
+
+OUTPUTS:
+    None  (side-effects only: seeds all RNGs, sets env var PYTHONHASHSEED)
+
+
+================================================================================
+
+FUNCTION: memory_check()
+--------------------------------------------------------------------------------
+PURPOSE:
+    Prints a snapshot of CUDA memory usage (total, allocated, reserved) for the
+    default GPU device. Intended for quick ad-hoc diagnostic prints.
+
+INPUTS:
+    None
+
+OUTPUTS:
+    None  (prints three lines to stdout)
+
+
+================================================================================
+
+FUNCTION: clear_gpu_memory()
+--------------------------------------------------------------------------------
+PURPOSE:
+    Frees unused GPU memory by emptying the CUDA cache and running the Python
+    garbage collector. Called at the end of each training epoch.
+
+INPUTS:
+    None
+
+OUTPUTS:
+    None  (side-effects: torch.cuda.empty_cache(), gc.collect())
+
+
+================================================================================
+
+CLASS: ComprehensiveLogger
+--------------------------------------------------------------------------------
+PURPOSE:
+    Multi-channel logging system that maintains four separate Python loggers
+    (main training, memory monitor, inference, errors) each writing to its own
+    file. Also accumulates structured metric dicts in memory and can flush them
+    all to JSON files.
+
+CONSTRUCTOR: __init__(log_dir="logs", experiment_name="coordinate_localization")
+    INPUTS:
+        log_dir          (str)  -- Directory where log files are written
+        experiment_name  (str)  -- Prefix used for all log and JSON file names
+    INITIALISES:
+        self.main_logger      -- Logger → <experiment>_main.log + stdout
+        self.memory_logger    -- Logger → <experiment>_memory.log
+        self.inference_logger -- Logger → <experiment>_inference.log
+        self.error_logger     -- Logger → <experiment>_errors.log (ERROR level)
+        self.training_metrics   (list)  -- Accumulated epoch metric dicts
+        self.validation_metrics (list)  -- Accumulated validation metric dicts
+        self.inference_metrics  (list)  -- Accumulated inference metric dicts
+        self.memory_metrics     (list)  -- Accumulated memory snapshot dicts
+        self.system_metrics     (list)  -- Reserved (currently unused)
+
+--------------------------------------------------------------------------------
+
+METHOD: _setup_loggers()
+    PURPOSE:
+        Internal. Creates the four named loggers by calling _create_logger for
+        each. Called once during __init__.
+    INPUTS:  None
+    OUTPUTS: None  (populates self.main_logger, self.memory_logger, etc.)
+
+--------------------------------------------------------------------------------
+
+METHOD: _create_logger(name, log_file, level=logging.INFO)
+    PURPOSE:
+        Internal factory that creates (or retrieves) a named Python logger with
+        a file handler and, for the main training logger only, a console handler.
+        Guards against duplicate handlers on re-use.
+    INPUTS:
+        name      (str)           -- Logger name suffix (combined with experiment_name)
+        log_file  (str)           -- Absolute path for the log file
+        level     (logging level) -- Minimum severity to capture (default INFO)
+    OUTPUTS:
+        logger  (logging.Logger)  -- Configured logger instance
+
+--------------------------------------------------------------------------------
+
+METHOD: memory_check_and_log(context="")
+    PURPOSE:
+        Queries CUDA memory statistics, appends a snapshot dict to
+        self.memory_metrics, writes to memory_logger, and prints a summary
+        to stdout for key lifecycle events ("Training Start", "Training End",
+        "Epoch End").
+    INPUTS:
+        context  (str)  -- Label for the snapshot (e.g. "Epoch 5 End")
+    OUTPUTS:
+        memory_info  (dict | None)  -- Snapshot dict with keys:
+                                       timestamp, context, total_memory_gb,
+                                       allocated_memory_gb, reserved_memory_gb,
+                                       free_memory_gb, memory_utilization_percent
+                                       Returns None if CUDA is unavailable.
+
+--------------------------------------------------------------------------------
+
+METHOD: log_epoch(epoch, train_loss, val_loss, lr, epoch_time)
+    PURPOSE:
+        Records per-epoch training metrics, writes a formatted INFO line to
+        main_logger, and triggers a memory snapshot for the epoch end.
+    INPUTS:
+        epoch       (int)    -- Current epoch number
+        train_loss  (float)  -- Average training loss for this epoch
+        val_loss    (float)  -- Average validation loss for this epoch
+        lr          (float)  -- Current learning rate
+        epoch_time  (float)  -- Wall-clock seconds for the epoch
+    OUTPUTS:
+        None  (appends to self.training_metrics; logs to file)
+
+--------------------------------------------------------------------------------
+
+METHOD: log_batch(epoch, batch_idx, batch_results, batch_time, memory_check_interval=50)
+    PURPOSE:
+        Logs per-batch loss breakdown every 10 batches and triggers a memory
+        snapshot every memory_check_interval batches.
+    INPUTS:
+        epoch                  (int)    -- Current epoch number
+        batch_idx              (int)    -- Index of the current batch
+        batch_results          (dict)   -- Loss dict from trainer.train_step;
+                                          expected keys: total_loss, final_fg_loss,
+                                          final_bg_loss
+        batch_time             (float)  -- Wall-clock seconds for this batch
+        memory_check_interval  (int)    -- How often (in batches) to log memory
+                                          (default 50)
+    OUTPUTS:
+        None  (logs to main_logger and optionally triggers memory snapshot)
+
+--------------------------------------------------------------------------------
+
+METHOD: log_inference(tomo_id, num_tiles, inference_time, reconstruction_time,
+                      total_time, volume_shape, score=None)
+    PURPOSE:
+        Records per-tomogram inference timing and optional score. Appends to
+        self.inference_metrics, writes to inference_logger, and triggers a
+        memory snapshot after each tomogram.
+    INPUTS:
+        tomo_id               (str)               -- Tomogram identifier
+        num_tiles             (int)               -- Number of tiles processed
+        inference_time        (float)             -- Seconds spent on model inference
+        reconstruction_time   (float)             -- Seconds spent on volume assembly
+        total_time            (float)             -- Total seconds for this tomogram
+        volume_shape          (tuple[int,int,int]) -- Shape of the prediction volume
+        score                 (float | None)      -- Optional metric score
+    OUTPUTS:
+        None  (appends to self.inference_metrics; logs to file)
+
+--------------------------------------------------------------------------------
+
+METHOD: log_error(error_msg, context="")
+    PURPOSE:
+        Logs an error message to error_logger and triggers a memory snapshot.
+        If memory utilisation exceeds 90% at the time of the error, an
+        additional warning is logged.
+    INPUTS:
+        error_msg  (str)  -- The error description
+        context    (str)  -- Label indicating where the error occurred
+    OUTPUTS:
+        None  (logs to error_logger; may log a warning)
+
+--------------------------------------------------------------------------------
+
+METHOD: save_all_metrics()
+    PURPOSE:
+        Serialises all accumulated metric lists to JSON files in self.log_dir.
+        Writes four files: training_metrics, inference_metrics, memory_metrics,
+        and a combined all_metrics file with an experiment summary section.
+    INPUTS:
+        None
+    OUTPUTS:
+        None  (writes four .json files to disk; logs completion to main_logger)
+
+================================================================================

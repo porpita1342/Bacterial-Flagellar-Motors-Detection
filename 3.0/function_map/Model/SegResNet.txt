@@ -1,0 +1,272 @@
+#AccelerateCoordinateLocalizationTrainer, SegResNetBackbone, DenseBCE, and create_binary_targets should
+#probably be elsewhere. 
+#AccelerateCoordinateLocalizationTrainer should be in train.py
+#DenseBCE should be in metrics.py 
+#create_batch_targets is a data preprocess step 
+
+================================================================================
+FILE: Model/SegResNet.py
+PURPOSE: Core model architecture (SegResNet encoder-decoder with deep supervision),
+         training logic (AccelerateCoordinateLocalizationTrainer), weighted BCE
+         loss (DenseBCE), Gaussian target generation, and small utility helpers.
+================================================================================
+
+
+
+CLASS: AccelerateCoordinateLocalizationTrainer
+--------------------------------------------------------------------------------
+PURPOSE:
+    Wraps a prepared SegResNetBackbone model with training utilities compatible
+    with HuggingFace Accelerate. Owns the loss criterion, Mixup module, and
+    target creation logic. Encapsulates a single training step including
+    augmentation, dual-output loss, and deep supervision.
+
+CONSTRUCTOR: __init__(model, accelerator, weight, mixup_alpha=0.2,
+                      gaussian_blob_sigma=2.0)
+    INPUTS:
+        model                (nn.Module)     -- Already Accelerate-prepared model
+        accelerator          (Accelerator)   -- HuggingFace Accelerate instance
+        weight               (Tensor)        -- Per-class BCE weights, shape [2]
+        mixup_alpha          (float)         -- Beta distribution param for Mixup
+        gaussian_blob_sigma  (float)         -- Sigma of Gaussian blobs in targets
+    INITIALISES:
+        self.mixup      -- Mixup(mix_beta=mixup_alpha, mixadd=False)
+        self.criterion  -- DenseBCE(class_weights=weight)
+
+--------------------------------------------------------------------------------
+
+METHOD: create_batch_targets(coordinates_list, shape)
+    PURPOSE:
+        Builds a batch of 2-channel (background / foreground) Gaussian target
+        volumes for an entire batch in one call.
+    INPUTS:
+        coordinates_list  (list[list])         -- Outer list len B; each inner list
+                                                   contains (z, y, x) motor coords
+                                                   for one sample (or [[-1,-1,-1]])
+        shape             (tuple[int,int,int]) -- Spatial shape (Z, Y, X) of targets
+    OUTPUTS:
+        batch_targets  (Tensor, shape [B, 2, Z, Y, X])  -- Soft Gaussian targets
+                                                            on accelerator.device
+
+--------------------------------------------------------------------------------
+
+METHOD: downsample_targets(targets, scale_factor)
+    PURPOSE:
+        Trilinearly downsamples a target tensor for penultimate-head supervision.
+        Called with scale_factor=0.5 to match the penultimate decoder resolution.
+    INPUTS:
+        targets       (Tensor, shape [B, 2, Z, Y, X])  -- Full-resolution targets
+        scale_factor  (float)                           -- Spatial scaling factor
+    OUTPUTS:
+        downsampled  (Tensor, shape [B, 2, Z', Y', X'])
+
+--------------------------------------------------------------------------------
+
+METHOD: train_step(batch_x, coordinates_list)
+    PURPOSE:
+        Executes one full training forward pass:
+          1. Creates full-resolution targets
+          2. Applies rotate + flip_3d augmentation to input AND targets
+          3. Applies Mixup to input AND targets
+          4. Downsamples targets for penultimate supervision
+          5. Forward pass through model → (pred_final, pred_penultimate)
+          6. Computes DenseBCE losses; total = loss_final + 0.5 * loss_penult
+    INPUTS:
+        batch_x           (Tensor, shape [B, C, Z, Y, X])  -- Input image batch
+        coordinates_list  (list[list])                      -- Motor coords per sample
+    OUTPUTS:
+        results  (dict)  -- {
+                              'total_loss'      : Tensor (scalar, differentiable)
+                              'final_bg_loss'   : Tensor (scalar)
+                              'final_fg_loss'   : Tensor (scalar)
+                              'penult_bg_loss'  : Tensor (scalar)
+                              'penult_fg_loss'  : Tensor (scalar)
+                            }
+
+
+================================================================================
+
+CLASS: SegResNetBackbone(nn.Module)
+--------------------------------------------------------------------------------
+PURPOSE:
+    3D encoder-decoder segmentation network based on the MONAI SegResNet design.
+    Returns two segmentation maps: a final (full-resolution) output and a
+    penultimate (half-resolution) output for deep supervision.
+
+CONSTRUCTOR: __init__(spatial_dims=3, init_filters=8, in_channels=1,
+                      out_channels=2, dropout_prob=None,
+                      act=("RELU",{"inplace":True}),
+                      norm=("GROUP",{"num_groups":8}),
+                      norm_name="", num_groups=8,
+                      use_conv_final=True,
+                      blocks_down=(1,2,2,4), blocks_up=(1,1,1),
+                      upsample_mode=UpsampleMode.NONTRAINABLE)
+    INPUTS:
+        spatial_dims    (int)         -- 2 or 3; must be 3 for this project
+        init_filters    (int)         -- Base channel count (doubles each down-level)
+        in_channels     (int)         -- Input image channels (1 for grayscale)
+        out_channels    (int)         -- Output segmentation classes (2: bg + fg)
+        dropout_prob    (float|None)  -- Dropout probability; disabled if None
+        act             (tuple|str)   -- Activation spec passed to MONAI
+        norm            (tuple|str)   -- Normalisation spec (GroupNorm by default)
+        norm_name       (str)         -- Deprecated; triggers norm override if set
+        num_groups      (int)         -- GroupNorm group count (used with norm_name)
+        use_conv_final  (bool)        -- Whether to apply 1×1 conv to output maps
+        blocks_down     (tuple)       -- ResBlocks per encoder level
+        blocks_up       (tuple)       -- ResBlocks per decoder level
+        upsample_mode   (UpsampleMode|str) -- Upsampling method in decoder
+
+--------------------------------------------------------------------------------
+
+METHOD: _make_down_layers()
+    PURPOSE:
+        Constructs the encoder as an nn.ModuleList. Each level consists of an
+        optional strided convolution (stride=2, skipped at level 0) followed by
+        N ResBlocks. Channel count doubles at each level.
+    INPUTS:  None (reads self.blocks_down, self.spatial_dims, etc.)
+    OUTPUTS:
+        down_layers  (nn.ModuleList)  -- List of nn.Sequential encoder stages
+
+--------------------------------------------------------------------------------
+
+METHOD: _make_up_layers()
+    PURPOSE:
+        Constructs the decoder as two parallel nn.ModuleLists:
+          - up_samples: 1×1 conv (halves channels) + upsample layer
+          - up_layers:  N ResBlocks at halved channel count
+        Built in top-down order (highest to lowest feature map).
+    INPUTS:  None (reads self.blocks_up, self.spatial_dims, etc.)
+    OUTPUTS:
+        (up_layers, up_samples)  -- tuple of two nn.ModuleLists
+
+--------------------------------------------------------------------------------
+
+METHOD: _make_final_conv(out_channels, in_channels)
+    PURPOSE:
+        Creates a single 1×1 convolution head to project feature maps to the
+        desired output channel count.
+    INPUTS:
+        out_channels  (int)  -- Number of output segmentation classes
+        in_channels   (int)  -- Feature map channel count to project from
+    OUTPUTS:
+        head  (nn.Sequential)  -- Single-layer projection head
+
+--------------------------------------------------------------------------------
+
+METHOD: encode(x)
+    PURPOSE:
+        Runs the input through convInit and each encoder level, collecting
+        intermediate feature maps for skip connections.
+    INPUTS:
+        x  (Tensor, shape [B, C, Z, Y, X])  -- Input image batch
+    OUTPUTS:
+        x       (Tensor)         -- Bottleneck feature map (deepest encoder output)
+        down_x  (list[Tensor])   -- Feature maps from each encoder level (for skips)
+
+--------------------------------------------------------------------------------
+
+METHOD: decode(x, down_x)
+    PURPOSE:
+        Runs the decoder: at each level, upsample + add skip connection + apply
+        ResBlocks. Applies the two projection heads to the last two feature maps
+        (penultimate and final).
+    INPUTS:
+        x       (Tensor)        -- Bottleneck feature map (reversed in forward)
+        down_x  (list[Tensor])  -- Encoder feature maps reversed (skip connections)
+    OUTPUTS:
+        (feature_maps, processed_feature_maps)
+            feature_maps           (list[Tensor])  -- All decoder feature maps
+            processed_feature_maps (list[Tensor])  -- [penultimate_output, final_output]
+                                                       after 1×1 conv heads
+
+--------------------------------------------------------------------------------
+
+METHOD: forward(x)
+    PURPOSE:
+        Full forward pass: encode → reverse skip list → decode → extract outputs.
+    INPUTS:
+        x  (Tensor, shape [B, 1, Z, Y, X])  -- Normalised input tile batch
+    OUTPUTS:
+        (final_output, penultimate_output)
+            final_output        (Tensor, shape [B, 2, Z, Y, X])    -- Full-res logits
+            penultimate_output  (Tensor, shape [B, 2, Z/2, Y/2, X/2]) -- Half-res logits
+
+
+================================================================================
+
+CLASS: DenseBCE(nn.Module)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Dense (voxel-wise) Binary Cross-Entropy loss with optional per-class and
+    per-voxel positive weighting. Computes per-class mean losses and returns
+    both a weighted scalar and a per-class breakdown.
+
+CONSTRUCTOR: __init__(class_weights=None, pos_weight=None)
+    INPUTS:
+        class_weights  (Tensor | None)  -- Shape [C]; weight per output class
+        pos_weight     (Tensor | None)  -- Optional per-voxel positive weight
+
+METHOD: forward(x, target)
+    PURPOSE:
+        Applies sigmoid to logits, computes BCE manually for numerical stability,
+        optionally applies pos_weight and class_weights, and reduces.
+    INPUTS:
+        x       (Tensor, shape [B, C, Z, Y, X])  -- Raw logits from model
+        target  (Tensor, shape [B, C, Z, Y, X])  -- Soft Gaussian target maps
+    OUTPUTS:
+        (weighted_loss, class_losses)
+            weighted_loss  (Tensor scalar)     -- Final scalar loss for backprop
+            class_losses   (Tensor, shape [C]) -- Per-class mean BCE (bg, fg)
+
+
+================================================================================
+
+FUNCTION: create_binary_targets(coordinates, shape, sigma=2.0)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Generates a 2-channel (background, foreground) soft target volume for one
+    sample. Places a Gaussian blob at each valid motor coordinate. Background
+    channel = 1 - foreground at every voxel. Invalid coordinates (out-of-bounds)
+    are silently skipped.
+
+INPUTS:
+    coordinates  (list of (z, y, x))  -- Motor positions in tile-local space;
+                                         entries with any axis < 0 are skipped
+    shape        (tuple[int,int,int]) -- Spatial dimensions (Z, Y, X) of the tile
+    sigma        (float)              -- Gaussian standard deviation in voxels
+
+OUTPUTS:
+    target  (Tensor, shape [2, Z, Y, X])  -- Float32 soft target;
+                                             channel 0 = background,
+                                             channel 1 = foreground
+
+
+================================================================================
+
+FUNCTION: count_parameters(model)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Counts the total number of trainable parameters in a model.
+
+INPUTS:
+    model  (nn.Module)  -- Any PyTorch model
+
+OUTPUTS:
+    count  (int)  -- Sum of numel() for all parameters where requires_grad=True
+
+
+================================================================================
+
+FUNCTION: human_format(num)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Converts a large integer (e.g. parameter count) to a human-readable string
+    with SI suffix (K, M, B, T).
+
+INPUTS:
+    num  (int | float)  -- Number to format
+
+OUTPUTS:
+    formatted  (str)  -- e.g. "1.23M" for 1,230,000
+
+================================================================================

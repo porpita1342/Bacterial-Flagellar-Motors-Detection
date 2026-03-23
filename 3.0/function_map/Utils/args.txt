@@ -1,0 +1,68 @@
+================================================================================
+FILE: Utils/args.py
+PURPOSE: Defines the CLI / config-file argument parser for training and
+         inference. All hyperparameters, paths, and mode flags are declared here.
+================================================================================
+
+
+FUNCTION: get_parser()
+--------------------------------------------------------------------------------
+PURPOSE:
+    Constructs and returns a ConfigArgParse argument parser pre-loaded with
+    every supported flag. Covers data paths, training modes, dataset settings,
+    augmentation options, training hyperparameters, inference options, and
+    logging/checkpointing.
+
+INPUTS:
+    None
+
+OUTPUTS:
+    p  (configargparse.ArgParser)  -- Fully configured parser ready to call
+                                      .parse_args() on.
+
+    Key arguments registered on the parser:
+      --config                  Config file path (YAML / INI / JSON)
+      --data_dir                Path to dataset root directory
+      --checkpoint_dir          Directory to save model checkpoints
+      --inference_data_dir      Path to inference dataset (optional)
+      --train / --val / --test / --train_val
+                                Mode flags controlling which stages run
+      --positive_ratio          float  Fraction of positive samples per batch (default 0.2)
+      --dataset_size            int    Virtual dataset length (default 1000)
+      --target_voxel_spacing    float  Angstroms per voxel after normalisation (default 10.0)
+      --input_dimensions        int[3] Tile size [Z, Y, X] (default [96,96,96])
+      --gaussian_blob_sigma     float  Sigma for Gaussian target blobs (default 2.0)
+      --mixup                   flag   Enable Mixup augmentation
+      --mixup_beta              float  Beta distribution parameter for Mixup (default 0.2)
+      --lr                      float  Learning rate (default 1e-4)
+      --epochs                  int    Number of training epochs (default 100)
+      --batch_size              int    Training batch size (default 16)
+      --shuffle                 flag   Shuffle training data
+      --pin_memory              flag   Pin DataLoader memory
+      --num_workers             int    DataLoader worker count (default 8)
+      --early_stopping_patience int    Epochs without improvement before stopping (default 10)
+      --class_weights           float+ Per-class BCE weights [bg, fg] (default [1.0, 200.0])
+      --inference_batch_size    int    Batch size during inference (default 4)
+      --inference_overlap       float  Sliding-window overlap fraction (default 0.25)
+      --inference_num_workers   int    Workers during inference (default 4)
+      --inference_tile_size     int[3] Sliding-window tile size (default [96,96,96])
+      --log_dir                 str    Log output directory (default './logs/')
+      --experiment_name         str    Tag for log file names
+      --seed                    int    Global random seed (default 42)
+
+
+================================================================================
+
+FUNCTION: get_config()
+--------------------------------------------------------------------------------
+PURPOSE:
+    Thin wrapper that calls get_parser() and returns the parser.
+    Provides a stable import target used throughout the project.
+
+INPUTS:
+    None
+
+OUTPUTS:
+    p  (configargparse.ArgParser)  -- Same parser returned by get_parser()
+
+================================================================================

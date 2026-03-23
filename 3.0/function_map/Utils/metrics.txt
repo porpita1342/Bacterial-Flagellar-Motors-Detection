@@ -1,0 +1,142 @@
+================================================================================
+FILE: Utils/metrics.py
+PURPOSE: Competition scoring and detection evaluation metrics. Provides the
+         official F-beta score, local peak detection, NMS, and coordinate-level
+         TP/FP/FN matching used during validation.
+================================================================================
+
+
+CLASS: ParticipantVisibleError(Exception)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Custom exception whose message is intended to be shown to competition
+    participants. All other exceptions remain hidden from participants.
+    No methods beyond standard Exception behaviour.
+
+
+================================================================================
+
+FUNCTION: distance_metric(solution, submission, thresh_ratio, min_radius)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Computes per-tomogram binary predictions by comparing predicted motor
+    coordinates against ground truth. A prediction counts as positive only if
+    it is within (min_radius * thresh_ratio / voxel_spacing) voxels of the
+    nearest ground truth motor.
+
+INPUTS:
+    solution      (pd.DataFrame)  -- Ground truth with columns:
+                                     'tomo_id', 'Motor axis 0/1/2',
+                                     'Voxel spacing', 'Has motor'
+    submission    (pd.DataFrame)  -- Predictions with columns:
+                                     'tomo_id', 'Motor axis 0/1/2', 'Has motor'
+    thresh_ratio  (float)         -- Multiplier applied to min_radius (typically 1.0)
+    min_radius    (float)         -- Detection radius in Angstroms (competition = 1000 Å)
+
+OUTPUTS:
+    predictions  (np.ndarray, shape [N,])  -- Binary array (0 or 1) per tomogram
+                                              indicating whether each prediction
+                                              is close enough to be a true positive
+
+
+================================================================================
+
+FUNCTION: comp_score(solution, submission, min_radius, beta)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Official competition scoring function. Aligns solution and submission by
+    tomo_id, derives 'Has motor' from coordinate columns, calls distance_metric,
+    and returns the sklearn F-beta score.
+
+INPUTS:
+    solution    (pd.DataFrame)  -- Ground truth DataFrame (see distance_metric)
+    submission  (pd.DataFrame)  -- Predictions DataFrame; any row with axis = -1
+                                   is treated as no-motor prediction
+    min_radius  (float)         -- Detection radius in Angstroms
+    beta        (float)         -- Beta value for F-beta score
+                                   (beta=2 → recall weighted 4× over precision)
+
+OUTPUTS:
+    score  (float)  -- F-beta score in [0, 1]
+
+
+================================================================================
+
+FUNCTION: detect_peaks(fg_prob, threshold=0.3, kernel_size=7)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Identifies local maxima in a 3D foreground probability map using max-pooling.
+    A voxel is a peak if it equals the local maximum within a neighbourhood and
+    exceeds the confidence threshold.
+
+INPUTS:
+    fg_prob      (Tensor, shape [Z, Y, X])  -- Per-voxel foreground probabilities
+    threshold    (float)                    -- Minimum confidence to report a peak
+                                              (default 0.3)
+    kernel_size  (int)                      -- Neighbourhood size for local-max check;
+                                              must be odd (default 7)
+
+OUTPUTS:
+    coords  (LongTensor, shape [N, 3])   -- (z, y, x) coordinates of each peak
+    values  (FloatTensor, shape [N,])    -- Confidence score at each peak
+
+
+================================================================================
+
+FUNCTION: nms_coords(pred_list, min_dist_voxels)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Greedy Non-Maximum Suppression on a list of coordinate predictions.
+    Sorts by confidence descending, keeps the top detection, and suppresses all
+    others within min_dist_voxels Euclidean distance.
+
+INPUTS:
+    pred_list        (list of (z, y, x, confidence))  -- Raw detections
+    min_dist_voxels  (float)                           -- Suppression radius in voxels
+
+OUTPUTS:
+    kept  (list of (z, y, x))  -- Surviving detection coordinates after NMS
+
+
+================================================================================
+
+FUNCTION: fbeta_score_coords(pred_coords, gt_coords, threshold_voxels, beta=2.0)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Computes TP, FP, and FN counts for coordinate-based motor detection using
+    greedy nearest-neighbour matching. Each GT motor is matched to the closest
+    unmatched prediction; a match is a TP only if the distance ≤ threshold_voxels.
+
+INPUTS:
+    pred_coords       (list of (z, y, x))  -- Predicted motor positions
+    gt_coords         (list of (z, y, x))  -- Ground truth motor positions
+    threshold_voxels  (float)              -- Maximum voxel distance for a valid match
+                                             (= 1000 Å / voxel_spacing)
+    beta              (float)              -- Unused in count computation; kept for
+                                             interface consistency (default 2.0)
+
+OUTPUTS:
+    tp  (int)  -- True positives
+    fp  (int)  -- False positives (unmatched predictions)
+    fn  (int)  -- False negatives (unmatched ground truths)
+
+
+================================================================================
+
+FUNCTION: compute_fbeta(tp, fp, fn, beta=2.0)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Computes the F-beta score from aggregated TP/FP/FN counts.
+    With beta=2, recall is weighted four times more than precision.
+    Returns 0.0 when denominator is zero (no predictions and no GT).
+
+INPUTS:
+    tp    (int)    -- True positive count
+    fp    (int)    -- False positive count
+    fn    (int)    -- False negative count
+    beta  (float)  -- Beta parameter (default 2.0)
+
+OUTPUTS:
+    score  (float)  -- F-beta score in [0, 1]
+
+================================================================================

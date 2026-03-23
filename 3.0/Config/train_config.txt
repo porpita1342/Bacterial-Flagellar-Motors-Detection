@@ -17,7 +17,7 @@ mixup_beta = 1.
 input_dimensions = [96, 96, 96]
 
 lr = 0.0001
-epochs = 100
+epochs = 3
 batch_size = 16
 shuffle = True
 pin_memory = True

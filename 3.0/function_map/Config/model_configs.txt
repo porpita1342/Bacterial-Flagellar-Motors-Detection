@@ -1,0 +1,103 @@
+================================================================================
+FILE: Config/model_configs.py
+PURPOSE: Centralised model and dataloader configuration. Exposes a SimpleNamespace
+         of model hyperparameters and three factory functions that build config
+         dicts from a parsed argument namespace. No argument parsing at import time.
+================================================================================
+
+
+MODULE-LEVEL OBJECTS
+--------------------------------------------------------------------------------
+train_transforms  (monai.transforms.Compose)
+    A MONAI transform pipeline applied to training tiles (input only):
+      - RandGaussianNoise    prob=0.2
+      - RandAdjustContrast   prob=0.2, gamma=(0.9, 1.1)
+      - RandGaussianSmooth   prob=0.2
+
+model_configs  (types.SimpleNamespace)
+    Container for architecture hyperparameter dicts.
+
+    model_configs.segresnet_backbone  (dict)
+        spatial_dims   = 3
+        in_channels    = 1
+        out_channels   = 2
+        init_filters   = 8
+        blocks_down    = (1, 2, 2, 4)
+        blocks_up      = (1, 1, 1)
+        dropout_prob   = 0.2
+
+
+================================================================================
+
+FUNCTION: get_train_df_cfg(cfg)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Builds the keyword-argument dict passed to CustomDataset for the training
+    split. Reads relevant fields from the parsed config namespace.
+
+INPUTS:
+    cfg  (argparse.Namespace)  -- Parsed arguments; must contain:
+                                   cfg.input_dimensions    (list[int], len 3)
+                                   cfg.positive_ratio      (float)
+                                   cfg.dataset_size        (int)
+                                   cfg.target_voxel_spacing (float)
+
+OUTPUTS:
+    config  (dict)  -- {
+                         "tile_size"            : tuple(cfg.input_dimensions),
+                         "positive_ratio"       : cfg.positive_ratio,
+                         "transform"            : train_transforms,
+                         "dataset_size"         : cfg.dataset_size,
+                         "seed"                 : 42,
+                         "target_voxel_spacing" : cfg.target_voxel_spacing,
+                       }
+
+
+================================================================================
+
+FUNCTION: get_train_loader_cfg(cfg)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Builds the keyword-argument dict passed to DataLoader for the training split.
+
+INPUTS:
+    cfg  (argparse.Namespace)  -- Parsed arguments; must contain:
+                                   cfg.batch_size   (int)
+                                   cfg.shuffle      (bool)
+                                   cfg.num_workers  (int)
+                                   cfg.pin_memory   (bool)
+
+OUTPUTS:
+    config  (dict)  -- {
+                         "batch_size"      : cfg.batch_size,
+                         "shuffle"         : cfg.shuffle,
+                         "num_workers"     : cfg.num_workers,
+                         "pin_memory"      : cfg.pin_memory,
+                         "prefetch_factor" : 1,
+                       }
+
+
+================================================================================
+
+FUNCTION: get_valid_loader_cfg(cfg)
+--------------------------------------------------------------------------------
+PURPOSE:
+    Builds the keyword-argument dict passed to DataLoader for the validation
+    split. Identical to the training loader config except shuffle is always False.
+
+INPUTS:
+    cfg  (argparse.Namespace)  -- Parsed arguments; must contain:
+                                   cfg.batch_size   (int)
+                                   cfg.num_workers  (int)
+                                   cfg.pin_memory   (bool)
+
+OUTPUTS:
+    config  (dict)  -- {
+                         "batch_size"      : cfg.batch_size,
+                         "shuffle"         : False,
+                         "num_workers"     : cfg.num_workers,
+                         "pin_memory"      : cfg.pin_memory,
+                         "prefetch_factor" : 1,
+                       }
+
+================================================================================

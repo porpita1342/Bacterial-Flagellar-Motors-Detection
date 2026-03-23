@@ -337,7 +337,7 @@ def train():
                 }, checkpoint_path)
 
                 logger.main_logger.info(f"Saved new best model with val_loss: {val_loss:.4f}")
-
+                
                 # Update tracker
                 last_best_path = checkpoint_path
         else:

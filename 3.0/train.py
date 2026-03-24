@@ -3,6 +3,8 @@ from typing import Any
 from collections import defaultdict
 
 import os
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True  # Fall back to eager if JIT backend fails
 import time
 import torch
 import torch.nn.functional as F
